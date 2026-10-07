@@ -1,0 +1,46 @@
+[package]
+name = "xwincode"
+version = "0.1.0"
+description = "XWinCode, an Xcode-style Swift IDE for Windows"
+authors = ["OnelightCyber"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/OnelightCyber/XWinCode"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "xwincode_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+sys-locale = "0.3"
+tokio = { version = "1", features = ["process", "io-util", "net", "rt-multi-thread", "macros", "sync", "time"] }
+plist = "1"
+regex = "1"
+walkdir = "2"
+trash = "5"
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1"
+portable-pty = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"

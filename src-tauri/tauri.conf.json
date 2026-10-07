@@ -1,0 +1,82 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "XWinCode",
+  "version": "0.1.0",
+  "identifier": "dev.xwincode.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "XWinCode",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 600,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "center": true,
+        "backgroundColor": "#00000000"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; media-src 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "publisher": "OnelightCyber",
+    "copyright": "© 2026 OnelightCyber. Free software under the GNU GPL v3 or later.",
+    "license": "GPL-3.0-or-later",
+    "homepage": "https://github.com/OnelightCyber/XWinCode",
+    "category": "DeveloperTool",
+    "shortDescription": "Swift IDE for Windows",
+    "longDescription": "XWinCode: write, build and run Swift on Windows, and ship iOS apps to your iPhone.",
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "sidebarImage": "installer/sidebar.bmp",
+        "languages": [
+          "English",
+          "French",
+          "Spanish",
+          "German",
+          "PortugueseBR",
+          "Italian",
+          "SimpChinese",
+          "Japanese"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE4MjI0QTlCNjA3QjMyMEUKUldRT01udGdtMG9pR0c1Nmh1RVQ0dzV4cjFrOHV6THlWMkpKUGJCY0xhSDd2YmFrTWxsRTJQUHAK",
+      "endpoints": [
+        "https://github.com/OnelightCyber/XWinCode/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
