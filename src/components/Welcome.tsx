@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, FolderOpen, Monitor, Plus, Search, Smartphone, Wrench, X } from "lucide-react";
 import logo from "../assets/logo.svg";
 import { keys, t, tn } from "../i18n";
-import { api, isTauri } from "../lib/ipc";
+import { api } from "../lib/ipc";
+import { revealInExplorer } from "../lib/links";
 import { pickFolder } from "../lib/dialogs";
 import { prettyPath, relativeTime, useAppVersion } from "../lib/format";
 import { useStore } from "../lib/store";
@@ -14,11 +15,7 @@ export async function openProjectDialog() {
   if (dir) await useStore.getState().openProject(dir);
 }
 
-export async function revealInExplorer(path: string) {
-  if (!isTauri) return;
-  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-  await revealItemInDir(path);
-}
+export { revealInExplorer };
 
 function ToolStatus() {
   const toolchain = useStore((s) => s.toolchain);

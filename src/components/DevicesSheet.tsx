@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { Cable, Copy, Download, Play, RefreshCw, RotateCcw, Smartphone, Trash2, Wifi } from "lucide-react";
+import { Cable, Camera, Copy, Download, Play, RefreshCw, RotateCcw, Smartphone, Trash2, Wifi } from "lucide-react";
 import { t } from "../i18n";
 import { confirmAsk, pickFile } from "../lib/dialogs";
 import { relativeTime } from "../lib/format";
+import { takeScreenshot } from "../lib/capture";
 import { api, errorMessage } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import type { Device, DeviceApp, InstallRecord } from "../lib/types";
@@ -141,6 +142,7 @@ export function DevicesSheet() {
   const [selected, setSelected] = useState<string | null>(null);
   const [wslCheck, setWslCheck] = useState<{ ok: boolean; text: string } | null>(null);
   const [checking, setChecking] = useState(false);
+  const [shooting, setShooting] = useState(false);
   const close = () => openSheet(null);
 
   useEffect(() => {
@@ -235,6 +237,16 @@ export function DevicesSheet() {
                         }}
                       >
                         {t("dev.useAsDestination")}
+                      </button>
+                      <button
+                        className="btn"
+                        disabled={shooting}
+                        onClick={() => {
+                          setShooting(true);
+                          void takeScreenshot(device).finally(() => setShooting(false));
+                        }}
+                      >
+                        {shooting ? <span className="spinner" /> : <Camera size={14} />} {shooting ? t("dev.screenshotting") : t("dev.screenshot")}
                       </button>
                     </div>
                   </div>

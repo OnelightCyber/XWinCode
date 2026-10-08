@@ -1,6 +1,7 @@
 import { openProjectDialog } from "../components/Welcome";
 import { t, type TKey } from "../i18n";
 import { requestClose } from "./appWindow";
+import { clearBreakpoints, debugContinue, debugStepIn, debugStepOut, debugStepOver, runOrDebug, startDebugging, stopDebugging, toggleBreakpoint, useDebug } from "./debugger";
 import { useStore } from "./store";
 import type { BuildAction } from "./types";
 
@@ -49,16 +50,34 @@ export const commands: Record<string, Command> = {
   quit: cmd("quit", "cmd.quit", "group.file", () => void requestClose(), { shortcut: "Alt+F4" }),
 
   build: cmd("build", "cmd.build", "group.product", build("build"), { shortcut: "Ctrl+B", needsProject: true }),
-  run: cmd("run", "cmd.run", "group.product", build("run"), { shortcut: "Ctrl+R", needsProject: true }),
+  run: cmd("run", "cmd.run", "group.product", () => void runOrDebug(), { shortcut: "Ctrl+R", needsProject: true }),
   test: cmd("test", "cmd.test", "group.product", build("test"), { shortcut: "Ctrl+U", needsProject: true }),
   clean: cmd("clean", "cmd.clean", "group.product", build("clean"), { shortcut: "Ctrl+Shift+K", needsProject: true }),
   archive: cmd("archive", "cmd.archive", "group.product", build("archive"), { shortcut: "Ctrl+Shift+A", needsProject: true }),
-  stop: cmd("stop", "cmd.stop", "group.product", () => void st().stop(), { shortcut: "Ctrl+." }),
+  stop: cmd("stop", "cmd.stop", "group.product", () => void (useDebug.getState().status !== "off" ? stopDebugging() : st().stop()), { shortcut: "Ctrl+." }),
+
+  debug: cmd("debug", "cmd.debug", "group.debug", () => void startDebugging(), { needsProject: true }),
+  continue: cmd("continue", "cmd.continue", "group.debug", debugContinue, { shortcut: "F5", needsProject: true }),
+  stepOver: cmd("stepOver", "cmd.stepOver", "group.debug", debugStepOver, { shortcut: "F10", needsProject: true }),
+  stepIn: cmd("stepIn", "cmd.stepIn", "group.debug", debugStepIn, { shortcut: "F11", needsProject: true }),
+  stepOut: cmd("stepOut", "cmd.stepOut", "group.debug", debugStepOut, { shortcut: "Shift+F11", needsProject: true }),
+  toggleBreakpoint: cmd(
+    "toggleBreakpoint",
+    "cmd.toggleBreakpoint",
+    "group.debug",
+    () => {
+      const s = st();
+      if (s.active && /\.swift$/i.test(s.active)) toggleBreakpoint(s.active, s.cursor.line);
+    },
+    { shortcut: "F9", needsProject: true },
+  ),
+  clearBreakpoints: cmd("clearBreakpoints", "cmd.clearBreakpoints", "group.debug", () => clearBreakpoints(), { needsProject: true }),
 
   toggleNavigator: cmd("toggleNavigator", "cmd.toggleNavigator", "group.view", () => st().toggle("navigator"), { shortcut: "Ctrl+0" }),
   toggleDebug: cmd("toggleDebug", "cmd.toggleDebug", "group.view", () => st().toggle("debugArea"), { shortcut: "Ctrl+Shift+Y" }),
   toggleInspector: cmd("toggleInspector", "cmd.toggleInspector", "group.view", () => st().toggle("inspector"), { shortcut: "Ctrl+Alt+0" }),
   library: cmd("library", "cmd.library", "group.view", () => st().openSheet("library"), { shortcut: "Ctrl+Shift+L", needsProject: true }),
+  canvas: cmd("canvas", "cmd.canvas", "group.view", () => st().toggleCanvas(), { shortcut: "Ctrl+Alt+Enter", needsProject: true }),
 
   navProject: cmd("navProject", "cmd.navProject", "group.navigate", () => st().setNavTab("project"), { shortcut: "Ctrl+1" }),
   findInProject: cmd(
@@ -99,7 +118,10 @@ function match(e: KeyboardEvent): string | null {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const digit = /^Digit(\d)$/.exec(e.code)?.[1] ?? /^Numpad(\d)$/.exec(e.code)?.[1];
 
-  if (e.key === "F5" && !ctrl) return e.shiftKey ? "stop" : "run";
+  if (e.key === "F5" && !ctrl) return e.shiftKey ? "stop" : useDebug.getState().status === "paused" ? "continue" : "run";
+  if (e.key === "F9" && !ctrl && !e.shiftKey) return "toggleBreakpoint";
+  if (e.key === "F10" && !ctrl) return "stepOver";
+  if (e.key === "F11" && !ctrl) return e.shiftKey ? "stepOut" : "stepIn";
   if (!ctrl) return null;
   if (key === "Tab") return e.shiftKey ? "prevTab" : "nextTab";
   if (digit !== undefined) {
@@ -171,7 +193,7 @@ export function handleKeydown(e: KeyboardEvent) {
   }
   const id = match(e);
   if (!id) {
-    if ((e.ctrlKey && (e.key === "r" || e.key === "R" || e.key === "p" || e.key === "j")) || e.key === "F5" || e.key === "F7") e.preventDefault();
+    if ((e.ctrlKey && (e.key === "r" || e.key === "R" || e.key === "p" || e.key === "j")) || e.key === "F5" || e.key === "F7" || e.key === "F10" || e.key === "F11") e.preventDefault();
     return;
   }
   if (id === "deviceConsole" && (e.target as Element | null)?.closest?.(".terminal-host")) return;

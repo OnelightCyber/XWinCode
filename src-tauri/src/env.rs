@@ -32,8 +32,8 @@ pub fn fresh_env() -> Vec<(String, String)> {
             let expanded = expand(value, &vars);
             if name.eq_ignore_ascii_case("path") {
                 path_parts.extend(expanded.split(';').filter(|s| !s.is_empty()).map(String::from));
-            } else if !vars.contains_key(&name.to_uppercase()) {
-                vars.insert(name.to_uppercase(), expanded.clone());
+            } else if let std::collections::hash_map::Entry::Vacant(slot) = vars.entry(name.to_uppercase()) {
+                slot.insert(expanded.clone());
                 out.push((name.clone(), expanded));
             }
         }

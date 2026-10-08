@@ -2,6 +2,8 @@
 mod i18n;
 mod bridge;
 mod builder;
+mod capture;
+mod dap;
 mod device;
 mod diagnostics;
 mod env;
@@ -9,6 +11,7 @@ mod fsops;
 mod idevice;
 mod installs;
 mod lsp;
+mod preview;
 mod process;
 mod projcfg;
 mod project;
@@ -54,6 +57,19 @@ fn navigation_guard() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+fn shutdown(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    app.state::<process::TaskManager>().stop();
+    pty::shutdown(app);
+    tauri::async_runtime::block_on(async {
+        idevice::shutdown(app).await;
+        lsp::shutdown(app).await;
+        preview::shutdown(app).await;
+        dap::shutdown(app).await;
+        capture::shutdown(app).await;
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -65,6 +81,9 @@ pub fn run() {
         .manage(pty::PtyState::default())
         .manage(lsp::LspState::default())
         .manage(idevice::DeviceLogState::default())
+        .manage(preview::PreviewState::default())
+        .manage(dap::DapState::default())
+        .manage(capture::CaptureState::default())
         .setup(|app| {
             use tauri::Manager;
             #[cfg(desktop)]
@@ -138,9 +157,22 @@ pub fn run() {
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,
+            preview::preview_prepare,
+            preview::preview_connect,
+            preview::preview_send,
+            preview::preview_disconnect,
+            capture::iphone_screenshot,
+            dap::dap_start,
+            dap::dap_send,
+            dap::dap_stop,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start XWinCode");
+        .build(tauri::generate_context!())
+        .expect("failed to start XWinCode")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                shutdown(app);
+            }
+        });
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use plist::Value;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
 
@@ -51,6 +51,10 @@ struct LogLines {
 struct LogExit {
     session: u64,
     code: Option<i32>,
+}
+
+pub async fn shutdown(app: &AppHandle) {
+    stop_session(&app.state::<DeviceLogState>()).await;
 }
 
 async fn stop_session(state: &DeviceLogState) {
@@ -214,7 +218,7 @@ pub async fn device_apps(app: AppHandle, udid: String) -> Result<Vec<DeviceApp>,
         Some(xml) => parse_apps(xml),
         None => {
             let text = format!("{out}{err}");
-            let msg = text.lines().map(str::trim).filter(|l| !l.is_empty()).last().map(str::to_string).unwrap_or_else(|| t!("err.noAnswer"));
+            let msg = text.lines().map(str::trim).rfind(|l| !l.is_empty()).map(str::to_string).unwrap_or_else(|| t!("err.noAnswer"));
             Err(t!("err.appList", error = msg))
         }
     }
@@ -243,7 +247,7 @@ pub async fn device_app_action(app: AppHandle, udid: String, bundle_id: String, 
     if ok {
         Ok(text)
     } else {
-        let last = text.lines().map(str::trim).filter(|l| !l.is_empty()).last().map(str::to_string).unwrap_or_else(|| t!("err.failed"));
+        let last = text.lines().map(str::trim).rfind(|l| !l.is_empty()).map(str::to_string).unwrap_or_else(|| t!("err.failed"));
         Err(last)
     }
 }

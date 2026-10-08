@@ -42,7 +42,7 @@ pub fn init(app: &AppHandle) {
 pub fn is_trusted(app: &AppHandle, root: &str) -> bool {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let k = key(root);
-    load(app).iter().any(|r| *r == k)
+    load(app).contains(&k)
 }
 
 pub fn trust(app: &AppHandle, root: &str) -> Result<(), String> {

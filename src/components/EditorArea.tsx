@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, CircleX, TriangleAlert, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, CircleX, Smartphone, TriangleAlert, X } from "lucide-react";
 import { keys, t } from "../i18n";
 import { editorFontFamily } from "../lib/fonts";
 import { openExternal } from "../lib/links";
@@ -8,11 +8,15 @@ import { monaco } from "../lib/monaco";
 import { allDocs, getDoc, isDirty, setModelOptions } from "../lib/models";
 import { basename, relative, samePath } from "../lib/paths";
 import { useStore } from "../lib/store";
+import { breakpointsFor, currentLocation, setBreakpointsFor, toggleBreakpoint, useDebug } from "../lib/debugger";
 import { KIND_BADGE, symbolAt, symbolsFor, type Sym } from "../lib/symbols";
 import type { Diagnostic } from "../lib/types";
 import { AppGlyph } from "./AppGlyph";
 import { FileIcon } from "./FileIcon";
 import { useMenu, type MenuEntry } from "./Menu";
+import { Resizer, usePanelSize } from "./Resizer";
+
+const Canvas = lazy(() => import("./canvas/Canvas"));
 
 const decorationIds = new WeakMap<monaco.editor.ITextModel, string[]>();
 
@@ -281,7 +285,17 @@ function JumpBar() {
         </span>
       )}
       <LspChip />
+      {project.kind === "iosApp" && active.toLowerCase().endsWith(".swift") && <CanvasToggle />}
     </div>
+  );
+}
+
+function CanvasToggle() {
+  const open = useStore((s) => s.canvas);
+  return (
+    <button className={`icon-btn canvas-toggle${open ? " on" : ""}`} title={`${t("cmd.canvas")} (${keys("Ctrl+Alt+Enter")})`} onClick={() => useStore.getState().toggleCanvas()}>
+      <Smartphone size={14} />
+    </button>
   );
 }
 
@@ -334,6 +348,10 @@ export function EditorArea() {
   const diagnostics = useStore((s) => s.diagnostics);
   const settings = useStore((s) => s.settings);
   const hasTabs = useStore((s) => s.tabs.length > 0);
+  const canvasOpen = useStore((s) => s.canvas);
+  const iosProject = useStore((s) => s.project?.kind === "iosApp");
+  const showCanvas = canvasOpen && iosProject && !!active && active.toLowerCase().endsWith(".swift");
+  const canvasSize = usePanelSize("canvas", 460, 320, 960);
 
   const fontSize = settings?.editorFontSize ?? 13;
   const options = useMemo<monaco.editor.IEditorOptions & monaco.editor.IGlobalEditorOptions>(
@@ -433,8 +451,13 @@ export function EditorArea() {
     const ed = editor.current;
     if (!ed || !reveal || !active || !samePath(reveal.path, active)) return;
     const pos = { lineNumber: reveal.line, column: reveal.column };
-    ed.setPosition(pos);
-    ed.revealPositionInCenterIfOutsideViewport(pos, monaco.editor.ScrollType.Smooth);
+    if (reveal.endLine !== undefined) {
+      ed.setSelection(new monaco.Selection(reveal.endLine, reveal.endColumn ?? 1, reveal.line, reveal.column));
+      ed.revealPositionInCenterIfOutsideViewport(pos, monaco.editor.ScrollType.Smooth);
+    } else {
+      ed.setPosition(pos);
+      ed.revealPositionInCenterIfOutsideViewport(pos, monaco.editor.ScrollType.Smooth);
+    }
     ed.focus();
   }, [reveal, active]);
 
@@ -442,13 +465,94 @@ export function EditorArea() {
     applyDiagnostics(diagnostics);
   }, [diagnostics, active]);
 
+  useEffect(() => {
+    const ed = editor.current;
+    if (!ed) return;
+    const points = ed.createDecorationsCollection();
+    const here = ed.createDecorationsCollection();
+    const hint = ed.createDecorationsCollection();
+    const swift = () => {
+      const model = ed.getModel();
+      const path = model ? allDocs().find((d) => d.model === model)?.path : undefined;
+      return path && /\.swift$/i.test(path) ? path : null;
+    };
+    const render = () => {
+      const path = swift();
+      const model = ed.getModel();
+      if (!path || !model) {
+        points.clear();
+        here.clear();
+        return;
+      }
+      const lines = breakpointsFor(path).filter((l) => l <= model.getLineCount());
+      const loc = currentLocation();
+      const at = loc && samePath(loc.path, path) ? loc.line : null;
+      points.set(
+        lines.map((line) => ({
+          range: new monaco.Range(line, 1, line, 1),
+          options: {
+            glyphMarginClassName: "xwc-bp",
+            glyphMarginHoverMessage: { value: t("debug.breakpoint") },
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          },
+        })),
+      );
+      here.set(at ? [{ range: new monaco.Range(at, 1, at, 1), options: { isWholeLine: true, className: "xwc-debug-line", glyphMarginClassName: lines.includes(at) ? "xwc-bp xwc-bp-hit" : "xwc-debug-arrow" } }] : []);
+      if (at) ed.revealLineInCenterIfOutsideViewport(at, monaco.editor.ScrollType.Smooth);
+    };
+    render();
+    const unsub = useDebug.subscribe(render);
+    const onModel = ed.onDidChangeModel(render);
+    const onEdit = ed.onDidChangeModelContent(() => {
+      const path = swift();
+      if (!path) return;
+      const moved = points.getRanges().map((r) => r.startLineNumber);
+      const saved = breakpointsFor(path);
+      if (moved.length !== saved.length || moved.some((l, i) => l !== saved[i])) setBreakpointsFor(path, moved);
+    });
+    const onDown = ed.onMouseDown((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN || !e.event.leftButton) return;
+      const path = swift();
+      const line = e.target.position?.lineNumber;
+      if (path && line) toggleBreakpoint(path, line);
+    });
+    const onMove = ed.onMouseMove((e) => {
+      const line = e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && swift() ? e.target.position?.lineNumber : undefined;
+      hint.set(line ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: "xwc-bp-hint" } }] : []);
+    });
+    const onLeave = ed.onMouseLeave(() => hint.clear());
+    return () => {
+      unsub();
+      onModel.dispose();
+      onEdit.dispose();
+      onDown.dispose();
+      onMove.dispose();
+      onLeave.dispose();
+      points.clear();
+      here.clear();
+      hint.clear();
+    };
+  }, []);
+
   return (
     <>
       {hasTabs && <TabBar />}
       {hasTabs && <JumpBar />}
-      <div className="editor-host">
-        <div ref={host} style={{ position: "absolute", inset: 0, visibility: active ? "visible" : "hidden" }} />
-        {!active && <EmptyEditor />}
+      <div className="editor-split">
+        <div className="editor-host">
+          <div ref={host} style={{ position: "absolute", inset: 0, visibility: active ? "visible" : "hidden" }} />
+          {!active && <EmptyEditor />}
+        </div>
+        {showCanvas && active && (
+          <>
+            <Resizer axis="x" onDrag={(d) => canvasSize.drag(-d)} onEnd={canvasSize.end} />
+            <div className="canvas-pane" style={{ width: canvasSize.size }}>
+              <Suspense fallback={<div className="canvas-empty">{t("canvas.loading")}</div>}>
+                <Canvas path={active} onClose={() => useStore.getState().toggleCanvas(false)} />
+              </Suspense>
+            </div>
+          </>
+        )}
       </div>
     </>
   );

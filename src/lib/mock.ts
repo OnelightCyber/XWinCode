@@ -65,6 +65,99 @@ struct ContentView: View {
     ContentView()
 }
 `,
+  [`${ROOT}\\Sources\\HelloApp\\AnimDemo.swift`]: `import SwiftUI
+
+struct AnimDemo: View {
+    @State private var expanded = false
+    @State private var liked = false
+
+    var body: some View {
+        VStack(spacing: 28) {
+            RoundedRectangle(cornerRadius: expanded ? 40 : 18)
+                .fill(Color("Brand"))
+                .frame(width: expanded ? 260 : 120, height: expanded ? 170 : 120)
+                .animation(.spring(bounce: 0.4), value: expanded)
+            Button(expanded ? "Shrink" : "Grow") {
+                expanded.toggle()
+            }
+            .buttonStyle(.borderedProminent)
+            Button {
+                withAnimation(.bouncy) {
+                    liked.toggle()
+                }
+            } label: {
+                Image(systemName: liked ? "heart.fill" : "heart")
+                    .font(.system(size: 44))
+                    .foregroundStyle(liked ? .red : .secondary)
+            }
+            if liked {
+                Text("Thanks!")
+                    .font(.title2.bold())
+                    .transition(.scale)
+            }
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    AnimDemo()
+}
+`,
+  [`${ROOT}\\Sources\\HelloApp\\Assets.xcassets\\Brand.colorset\\Contents.json`]: `{
+  "colors" : [
+    { "color" : { "color-space" : "srgb", "components" : { "alpha" : "1.000", "blue" : "0.945", "green" : "0.353", "red" : "0.369" } }, "idiom" : "universal" },
+    { "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ], "color" : { "color-space" : "srgb", "components" : { "alpha" : "1.000", "blue" : "0xFF", "green" : "0x8A", "red" : "0x8C" } }, "idiom" : "universal" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}
+`,
+  [`${ROOT}\\Sources\\HelloApp\\TasksView.swift`]: `import SwiftUI
+
+struct Chore: Identifiable {
+    let id = UUID()
+    var title: String
+    var done = false
+}
+
+struct TasksView: View {
+    @State private var chores = [
+        Chore(title: "Plug in the iPhone"),
+        Chore(title: "Build with Ctrl+B", done: true),
+        Chore(title: "Ship it"),
+    ]
+    @State private var notifications = true
+    @State private var volume = 0.6
+    @State private var name = ""
+
+    var body: some View {
+        TabView {
+            NavigationStack {
+                List {
+                    Section("Today · \\(chores.filter { !$0.done }.count) left") {
+                        ForEach($chores) { $chore in
+                            Toggle(chore.title, isOn: $chore.done)
+                        }
+                    }
+                    Section("Settings") {
+                        TextField("Your name", text: $name)
+                        Toggle("Notifications", isOn: $notifications)
+                        Slider(value: $volume, in: 0...1)
+                    }
+                    Button("Add a task", systemImage: "plus") {
+                        chores.append(Chore(title: name.isEmpty ? "New task" : name))
+                    }
+                }
+                .navigationTitle("Tasks")
+            }
+            .tabItem { Label("Tasks", systemImage: "checklist") }
+
+            ContentView()
+                .tabItem { Label("Hello", systemImage: "hand.wave") }
+        }
+    }
+}
+`,
   [`${ROOT}\\Sources\\HelloApp\\Models\\Item.swift`]: `import Foundation
 
 struct Item: Identifiable, Codable {
@@ -148,6 +241,8 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let taskId = 0;
 let logSession = 0;
+let previewSession = 0;
+let previewTimer: ReturnType<typeof setInterval> | null = null;
 
 async function simulateBuild(action: string) {
   const id = ++taskId;
@@ -213,6 +308,39 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       return r(undefined);
     case "default_projects_dir":
       return r("C:\\Users\\dev\\XWinCode Projects");
+    case "preview_prepare":
+      return r({ root: "C:\\Users\\dev\\AppData\\Local\\dev.xwincode.app\\XWinCodePreview", bundleId: "dev.xwincode.preview" });
+    case "preview_connect": {
+      previewSession += 1;
+      const session = previewSession;
+      if (previewTimer) clearInterval(previewTimer);
+      previewTimer = setInterval(() => {
+        const stats = { type: "stats", fps: 118 + Math.round(Math.random() * 2), maxFps: 120, memoryMB: 38 + Math.random() * 4, cpu: 3 + Math.random() * 5, thermal: "nominal", lowPower: false, battery: 0.82 };
+        mockEmit("preview://message", { session, message: JSON.stringify(stats) });
+      }, 1000);
+      const hello = { type: "hello", version: 1, name: "iPhone", model: "iPhone", machine: "iPhone16,1", system: "26.0", width: 393, height: 852, scale: 3, maxFps: 120 };
+      return r({ session, hello: JSON.stringify(hello) });
+    }
+    case "dap_start":
+      throw "LLDB was not found: install Swift for Windows (Settings → Tools & SDKs).";
+    case "dap_send":
+    case "dap_stop":
+      return r(undefined);
+    case "preview_send": {
+      const sent = JSON.parse(String(a.message)) as { type?: string; on?: boolean };
+      if (sent.type === "record") {
+        const session = previewSession;
+        if (sent.on) setTimeout(() => mockEmit("preview://message", { session, message: JSON.stringify({ type: "recording", state: "on" }) }), 400);
+        else
+          for (let i = 0; i < 4; i++)
+            setTimeout(() => mockEmit("preview://video", { session, part: i, parts: 4, path: i === 3 ? "C:\\Users\\dev\\Videos\\XWinCode\\iPhone 2026-10-08 at 19.30.00.mp4" : null, error: null }), 350 * (i + 1));
+      }
+      return r(undefined);
+    }
+    case "preview_disconnect":
+      if (previewTimer) clearInterval(previewTimer);
+      previewTimer = null;
+      return r(undefined);
     case "project_trusted":
       return r(true);
     case "trust_project":
@@ -285,6 +413,9 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
     case "device_app_action":
       await delay(500);
       return r("ok");
+    case "iphone_screenshot":
+      await delay(900);
+      return r(`C:\\Users\\dev\\Pictures\\XWinCode\\${a.name} 2026-10-08 at 18.48.29.png`);
     case "list_installs":
       return r([
         {

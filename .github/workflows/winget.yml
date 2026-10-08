@@ -1,0 +1,37 @@
+name: winget
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish to winget (for example v2.0.0)
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: winget
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check the winget token
+        id: token
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if ($env:TOKEN) { "ok=true" >> $env:GITHUB_OUTPUT } else { Write-Host "WINGET_TOKEN is not set: skipping the winget update." }
+      - name: Open the winget-pkgs pull request
+        if: steps.token.outputs.ok == 'true'
+        uses: vedantmgoyal9/winget-releaser@f29ed1ffd34f91223a2aebaa71beaab0901ff9fd
+        with:
+          identifier: OnelightCyber.XWinCode
+          installers-regex: '_x64-setup\.exe$'
+          release-tag: ${{ inputs.tag || github.event.release.tag_name }}
+          token: ${{ secrets.WINGET_TOKEN }}

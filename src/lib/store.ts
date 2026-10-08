@@ -54,6 +54,8 @@ interface Reveal {
   path: string;
   line: number;
   column: number;
+  endLine?: number;
+  endColumn?: number;
   nonce: number;
 }
 
@@ -65,6 +67,7 @@ interface State {
   settings: Settings | null;
   project: ProjectInfo | null;
   trusted: boolean;
+  canvas: boolean;
   dirs: Record<string, Entry[]>;
   expanded: Record<string, boolean>;
   selected: string | null;
@@ -121,12 +124,13 @@ interface Actions {
   openProject(path: string): Promise<void>;
   setProject(info: ProjectInfo): Promise<void>;
   ensureTrusted(): Promise<boolean>;
+  toggleCanvas(open?: boolean): void;
   closeProject(): Promise<boolean>;
   loadDir(path: string): Promise<void>;
   toggleDir(path: string, open?: boolean): void;
   refreshTree(): Promise<void>;
   select(path: string | null): void;
-  openFile(path: string, at?: { line: number; column?: number }): Promise<void>;
+  openFile(path: string, at?: { line: number; column?: number; endLine?: number; endColumn?: number }): Promise<void>;
   closeTab(path: string): Promise<void>;
   setActive(path: string): void;
   touchDirty(): void;
@@ -216,6 +220,13 @@ export const useStore = create<Store>((set, get) => ({
   settings: null,
   project: null,
   trusted: false,
+  canvas: (() => {
+    try {
+      return localStorage.getItem("xwc.canvas.open") === "1";
+    } catch {
+      return false;
+    }
+  })(),
   dirs: {},
   expanded: {},
   selected: null,
@@ -363,6 +374,14 @@ export const useStore = create<Store>((set, get) => ({
     if (!trusted) void get().ensureTrusted();
   },
 
+  toggleCanvas(open) {
+    const next = open ?? !get().canvas;
+    set({ canvas: next });
+    try {
+      localStorage.setItem("xwc.canvas.open", next ? "1" : "0");
+    } catch {}
+  },
+
   ensureTrusted() {
     const project = get().project;
     if (!project) return Promise.resolve(false);
@@ -447,7 +466,7 @@ export const useStore = create<Store>((set, get) => ({
     }
     const nextTabs = tabs.some((p) => samePath(p, path)) ? tabs : [...tabs, path];
     set({ tabs: nextTabs, active: path, selected: path });
-    if (at) set({ reveal: { path, line: at.line, column: at.column ?? 1, nonce: Date.now() } });
+    if (at) set({ reveal: { path, line: at.line, column: at.column ?? 1, endLine: at.endLine, endColumn: at.endColumn, nonce: Date.now() } });
   },
 
   async closeTab(path) {

@@ -2,7 +2,7 @@ use std::process::Stdio;
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 
@@ -192,6 +192,15 @@ pub async fn lsp_send(state: State<'_, LspState>, message: String) -> Result<(),
     let frame = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
     server.stdin.write_all(frame.as_bytes()).await.map_err(|e| e.to_string())?;
     server.stdin.flush().await.map_err(|e| e.to_string())
+}
+
+pub async fn shutdown(app: &AppHandle) {
+    if let Some(mut s) = app.state::<LspState>().inner.lock().await.take() {
+        if let Some(pid) = s.child.id() {
+            crate::process::kill_tree(pid);
+        }
+        let _ = s.child.kill().await;
+    }
 }
 
 #[tauri::command]

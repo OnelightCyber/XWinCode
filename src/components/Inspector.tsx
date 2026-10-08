@@ -5,6 +5,7 @@ import { getDoc } from "../lib/models";
 import { basename, dirname, extname, relative } from "../lib/paths";
 import { destinationLabel, useStore } from "../lib/store";
 import { kindLabel } from "./AppGlyph";
+import { ViewInspector } from "./canvas/ViewInspector";
 import { revealInExplorer } from "./Welcome";
 
 function fileType(path: string): string {
@@ -37,19 +38,33 @@ function rich(key: TKey, codes: Record<string, string>): ReactNode[] {
     });
 }
 
+function CursorInfo() {
+  const cursor = useStore((s) => s.cursor);
+  return (
+    <dd>
+      {t("insp.cursorPos", { line: cursor.line, column: cursor.column })}
+      {cursor.selection > 0 && <span className="muted"> {t("insp.selected", { count: cursor.selection })}</span>}
+    </dd>
+  );
+}
+
+function LineCount({ path }: { path: string }) {
+  useStore((s) => s.dirtyTick);
+  return <dd>{getDoc(path)?.model.getLineCount() ?? 0}</dd>;
+}
+
 function FileInspector() {
   const project = useStore((s) => s.project);
   const active = useStore((s) => s.active);
-  const cursor = useStore((s) => s.cursor);
   const destination = useStore((s) => s.destination);
   const configuration = useStore((s) => s.configuration);
   const openSheet = useStore((s) => s.openSheet);
-  useStore((s) => s.dirtyTick);
   const doc = active ? getDoc(active) : undefined;
   const modelOptions = doc?.model.getOptions();
 
   return (
     <>
+      <ViewInspector />
       {active && project && (
         <div className="insp-section">
           <h4>{t("insp.identity")}</h4>
@@ -83,12 +98,9 @@ function FileInspector() {
             <dt>{t("insp.indentation")}</dt>
             <dd>{modelOptions?.insertSpaces === false ? t("insp.tabs", { count: modelOptions.tabSize }) : tn("insp.spaces", modelOptions?.tabSize ?? 4)}</dd>
             <dt>{t("insp.lines")}</dt>
-            <dd>{doc.model.getLineCount()}</dd>
+            <LineCount path={active!} />
             <dt>{t("insp.cursor")}</dt>
-            <dd>
-              {t("insp.cursorPos", { line: cursor.line, column: cursor.column })}
-              {cursor.selection > 0 && <span className="muted"> {t("insp.selected", { count: cursor.selection })}</span>}
-            </dd>
+            <CursorInfo />
           </dl>
         </div>
       )}

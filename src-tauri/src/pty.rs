@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{env, settings, wsl};
 
@@ -136,6 +136,13 @@ pub fn pty_resize(state: State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> 
     let sessions = state.sessions.lock().unwrap();
     let s = sessions.get(&id).ok_or_else(|| t!("err.terminalClosed"))?;
     s.master.resize(size(cols, rows)).map_err(|e| e.to_string())
+}
+
+pub fn shutdown(app: &AppHandle) {
+    let sessions: Vec<Session> = app.state::<PtyState>().sessions.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, s)| s).collect();
+    for mut s in sessions {
+        let _ = s.child.kill();
+    }
 }
 
 #[tauri::command]

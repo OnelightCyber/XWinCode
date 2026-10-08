@@ -21,6 +21,7 @@ import logo from "../assets/logo.svg";
 import { keys, t, type TKey } from "../i18n";
 import { appWindow, requestClose } from "../lib/appWindow";
 import { commands } from "../lib/commands";
+import { runOrDebug, stopDebugging, useDebug } from "../lib/debugger";
 import { clockTime } from "../lib/format";
 import { isTauri } from "../lib/ipc";
 import { destinationLabel, resultLabel, useStore } from "../lib/store";
@@ -230,7 +231,22 @@ function AppMenu() {
         {
           type: "submenu",
           label: t("group.product"),
-          entries: [item("build"), item("run"), item("test"), item("archive"), sep, item("clean"), sep, item("stop", { disabled: s.task?.status !== "running" })],
+          entries: [item("build"), item("run"), item("test"), item("archive"), sep, item("clean"), sep, item("stop", { disabled: s.task?.status !== "running" && useDebug.getState().status === "off" })],
+        },
+        {
+          type: "submenu",
+          label: t("group.debug"),
+          entries: [
+            item("debug"),
+            sep,
+            item("continue", { disabled: useDebug.getState().status !== "paused" }),
+            item("stepOver", { disabled: useDebug.getState().status !== "paused" }),
+            item("stepIn", { disabled: useDebug.getState().status !== "paused" }),
+            item("stepOut", { disabled: useDebug.getState().status !== "paused" }),
+            sep,
+            item("toggleBreakpoint"),
+            item("clearBreakpoints"),
+          ],
         },
         {
           type: "submenu",
@@ -268,15 +284,15 @@ function AppMenu() {
 function RunControls() {
   const hasProject = useStore((s) => !!s.project);
   const running = useStore((s) => s.task?.status === "running");
-  const build = useStore((s) => s.build);
   const stop = useStore((s) => s.stop);
-  if (!hasProject && !running) return null;
+  const debugging = useDebug((s) => s.status !== "off");
+  if (!hasProject && !running && !debugging) return null;
   return (
     <div className="tb-group glass lg">
-      <button className={`tb-btn run${running ? " busy" : ""}`} title={tip(t("cmd.run"), "Ctrl+R")} disabled={!hasProject} onClick={() => void build("run")}>
+      <button className={`tb-btn run${running || debugging ? " busy" : ""}`} title={tip(t("cmd.run"), "Ctrl+R")} disabled={!hasProject} onClick={() => void runOrDebug()}>
         <Play size={14} fill="currentColor" />
       </button>
-      <button className="tb-btn stop" title={tip(t("cmd.stop"), "Ctrl+.")} disabled={!running} onClick={() => void stop()}>
+      <button className="tb-btn stop" title={tip(t("cmd.stop"), "Ctrl+.")} disabled={!running && !debugging} onClick={() => void (debugging ? stopDebugging() : stop())}>
         <Square size={12} fill="currentColor" />
       </button>
     </div>

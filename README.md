@@ -72,8 +72,20 @@ Options: `-Yes` (accept every default), `-SkipWindowsToolchain`, `-SkipIos`, `-S
 - **Format on save** with SourceKit-LSP, and **search and replace** across the whole project (`Ctrl+Shift+F`).
 - **SwiftUI Library** (`Ctrl+Shift+L`): about sixty views, modifiers and snippets, inserted with tab stops.
 
-**Build and run**
+**Canvas**
+- **Live SwiftUI preview** (`Ctrl+Alt+Enter`) next to the code, redrawn as you type. A built-in Swift interpreter runs your views, `#Preview` blocks and `PreviewProvider`s, with `@State`, bindings, `@Observable` models, navigation, tabs, lists, forms and controls that respond to clicks.
+- **29 iPhones and 6 iPads**, from iPhone 11 to iPhone 17 Pro Max: real screen sizes, safe areas, Dynamic Island or notch, portrait or landscape, light and dark, every Dynamic Type size. Each model comes with a frame-time estimate against its chip and refresh rate.
+- **Animations and assets**: `withAnimation`, `.animation` and `.transition` play as you click; colors, SVG images and custom fonts come from your project.
+- **Live on iPhone**: the free XWinCode Preview app draws the same preview with Apple's real SwiftUI on your iPhone, over USB or Wi-Fi, sends your taps back, and reports real fps, memory, CPU and thermal state. One click installs it from the Canvas. Take a screenshot of the iPhone or record a video of the preview without leaving the Canvas.
+- **Selection mode**: click a view in the preview to jump to its code, and see the view under the cursor outlined. The **view inspector** changes its font, colors, padding, frame or text and rewrites the code for you. **Variants** show light and dark, several screen sizes, text sizes, orientations or every `#Preview` side by side.
+
+<p align="center">
+  <img src="docs/canvas-demo.gif" alt="The Canvas: toggles and a text field react as you click and type, variants show light and dark and three screen sizes, and selection mode jumps from a view to its code" />
+</p>
+
+**Build, run and debug**
 - **Windows programs**: Swift packages built with the official toolchain (`swift build`, `run`, `test`). Errors land in the editor, progress is live, and the console takes standard input.
+- **Debugger** for Windows programs, built on LLDB: breakpoints in the gutter (`F9`), variables, call stack, Continue (`F5`), Step Over (`F10`), Step Into (`F11`) and Step Out (`Shift+F11`).
 - **iPhone apps**: built, signed and installed by [xtool](https://github.com/xtool-org/xtool) in WSL, over USB or Wi-Fi.
 - **Project templates**: iOS app (SwiftUI), Windows command-line tool, library with tests.
 - **Project settings**: bundle ID, display name, version and build, app icon (drop any image, it is cropped to 1024 × 1024) and privacy permissions, without touching `Info.plist` by hand.
@@ -83,6 +95,7 @@ Options: `-Yes` (accept every default), `-SkipWindowsToolchain`, `-SkipIos`, `-S
 - **Windows → WSL bridge** for usbmuxd through WSL interop: no usbipd, no open network port, no firewall rule.
 - **iPhone console** (`Ctrl+Shift+C`): live device logs, filtered to your app or not.
 - **Installed apps**: launch, reinstall or uninstall them from the Devices window.
+- **Take Screenshot**: the whole iPhone screen at full resolution, saved in Pictures › XWinCode, on iOS 17 and later too. XWinCode downloads [go-ios](https://github.com/danielpaulus/go-ios) the first time, checks it against its SHA-256 and runs it without administrator rights.
 - **7-day reminder**: apps signed with a free Apple ID stop working after seven days. XWinCode tells you before they expire and reinstalls them in one click.
 
 **Everywhere**
@@ -111,7 +124,7 @@ Options: `-Yes` (accept every default), `-SkipWindowsToolchain`, `-SkipIos`, `-S
 | iPhone app | xtool in WSL, Swift for Linux, the iOS SDK extracted from `Xcode.xip`, signing with your Apple ID |
 | Device | Apple Mobile Device service (Apple Devices app), relayed into WSL by `socat` and `xwincode.exe --usbmux-stdio` |
 
-Apple only ships its iOS tools for macOS. Outside a Mac, the one open-source toolchain that works is xtool, on Linux: hence WSL. There is no iOS Simulator or SwiftUI preview outside macOS, so you test on the device itself.
+Apple only ships its iOS tools for macOS. Outside a Mac, the one open-source toolchain that works is xtool, on Linux: hence WSL. There is no iOS Simulator outside macOS, so XWinCode brings its own preview: the Canvas runs your SwiftUI code in a built-in interpreter and draws an approximation of it, and Live on iPhone sends the same view tree to the XWinCode Preview app, which draws it with the real SwiftUI on your device.
 
 ## Requirements
 
@@ -135,6 +148,9 @@ The setup script and **Settings → Tools & SDKs** take care of all of it.
 | Command Palette | `Ctrl+Shift+P` |
 | Find in Project | `Ctrl+Shift+F` |
 | SwiftUI Library | `Ctrl+Shift+L` |
+| Canvas | `Ctrl+Alt+Enter` |
+| Toggle Breakpoint | `F9` |
+| Continue / Step Over / Step Into / Step Out | `F5` / `F10` / `F11` / `Shift+F11` |
 | iPhone Console | `Ctrl+Shift+C` |
 | New Terminal | `Ctrl+Shift+T` |
 | Devices | `Ctrl+Shift+2` |
@@ -161,12 +177,17 @@ src/                  React interface
   components/         toolbar, navigator, editor, consoles, sheets
   i18n/               translations, one JSON file per language, shared with Rust
   lib/                state (zustand), IPC, LSP client, commands, SwiftUI library
+  lib/preview/        Swift interpreter for the Canvas (lexer, parser, runtime, iPhone models)
+  components/canvas/  Canvas panel and SwiftUI renderer
 src-tauri/src/
   builder.rs          scheme actions (build, run, test, archive)
   process.rs          streamed tasks and diagnostics
   device.rs           iPhone discovery (usbmuxd and lockdown)
   bridge.rs           usbmuxd bridge from Windows to WSL (stdio interop)
   idevice.rs          iPhone console and installed apps
+  preview.rs          Live on iPhone link (usbmuxd tunnel to XWinCode Preview)
+  capture.rs          iPhone screenshots (go-ios, verified and run on demand)
+  dap.rs              debugger bridge (lldb-dap)
   installs.rs         installed apps and their expiry dates
   projcfg.rs          project settings (xtool.yml, Info.plist, icon)
   lsp.rs              SourceKit-LSP bridge (Windows or WSL)
@@ -174,6 +195,7 @@ src-tauri/src/
   toolchain.rs        toolchain checks and installers
   trust.rs            Restricted Mode (trusted projects)
   i18n.rs             backend translations
+src-tauri/preview-app/  XWinCode Preview, the companion iPhone app (SwiftUI, built with xtool)
 scripts/
   install.ps1         one-line setup
   release.mjs         changelog, version bump and release tag

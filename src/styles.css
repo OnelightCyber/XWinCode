@@ -262,9 +262,15 @@ textarea {
 .toast,
 .hud {
   background: linear-gradient(180deg, var(--glass-sheen-top), var(--glass-sheen-bottom) 55%), var(--g-bg, var(--glass-bg));
+  box-shadow: var(--glass-inner), var(--g-shadow, var(--glass-shadow));
+}
+.welcome,
+.sheet,
+.menu,
+.toast,
+.hud {
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  box-shadow: var(--glass-inner), var(--g-shadow, var(--glass-shadow));
 }
 .glass::before,
 .sheet::before,
@@ -1152,10 +1158,33 @@ textarea {
 .jumpbar > .row:last-of-type .crumb {
   color: var(--text);
 }
+.editor-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
 .editor-host {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   position: relative;
+}
+.canvas-pane {
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--raised);
+}
+.canvas-toggle {
+  margin-left: 6px;
+  width: 24px;
+  height: 22px;
+}
+.canvas-toggle.on {
+  background: var(--press);
+  color: var(--text);
 }
 .editor-empty {
   position: absolute;
@@ -3627,4 +3656,201 @@ button.chip:hover {
 }
 :root.reduce-motion .lg::after {
   display: none;
+}
+
+.monaco-editor .xwc-bp::before,
+.monaco-editor .xwc-bp-hint::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 15px;
+  height: 11px;
+  margin-top: -5.5px;
+  background: #0a84ff;
+  clip-path: polygon(0 0, 70% 0, 100% 50%, 70% 100%, 0 100%);
+  border-radius: 2px;
+}
+.monaco-editor .xwc-bp-hint::before {
+  background: color-mix(in srgb, #0a84ff 35%, transparent);
+}
+.monaco-editor .xwc-bp-hit::before {
+  background: #30d158;
+}
+.monaco-editor .xwc-debug-arrow::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 15px;
+  height: 11px;
+  margin-top: -5.5px;
+  background: #30d158;
+  clip-path: polygon(0 0, 70% 0, 100% 50%, 70% 100%, 0 100%);
+}
+.monaco-editor .xwc-debug-line {
+  background: color-mix(in srgb, #30d158 18%, transparent);
+}
+.dbg-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+.dbg-status {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.dbg-status.paused {
+  color: #30d158;
+}
+.debug-body:has(.dbg-side) > .debug-pane {
+  left: 300px;
+}
+.debug-body:has(.dbg-side) > .terminal-host {
+  left: 312px;
+}
+.dbg-side {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  font-size: 12px;
+}
+.dbg-head {
+  padding: 7px 10px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.dbg-vars,
+.dbg-frames {
+  overflow: auto;
+  min-height: 0;
+}
+.dbg-vars {
+  flex: 1.4;
+}
+.dbg-frames {
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+.dbg-var,
+.dbg-frame {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 8px;
+  text-align: left;
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 11.5px;
+  border-radius: 5px;
+}
+.dbg-var:hover,
+.dbg-frame:hover {
+  background: var(--hover);
+}
+.dbg-var.scope {
+  font-family: inherit;
+  font-weight: 600;
+}
+.dbg-chev {
+  width: 11px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+}
+.dbg-name {
+  flex: none;
+  color: var(--text-1);
+}
+.dbg-type {
+  flex: none;
+  color: var(--text-3);
+}
+.dbg-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64d2ff;
+  text-align: right;
+}
+.dbg-frame.on {
+  background: var(--menu-active, var(--hover));
+}
+.dbg-frame.sys {
+  color: var(--text-3);
+}
+.dbg-fn {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dbg-loc {
+  flex: none;
+  color: var(--text-3);
+}
+.dbg-empty,
+.dbg-none {
+  padding: 10px;
+  color: var(--text-3);
+}
+
+.view-insp h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #0a84ff;
+}
+.view-insp .kv {
+  align-items: center;
+}
+.view-insp .field {
+  height: 26px;
+}
+.view-insp .field input {
+  width: 100%;
+}
+.insp-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.insp-num {
+  width: 64px;
+}
+.insp-hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+.insp-pair input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+.insp-pair .muted {
+  white-space: nowrap;
+  font-size: 11.5px;
 }

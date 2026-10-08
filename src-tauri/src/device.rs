@@ -111,7 +111,7 @@ async fn list_attached() -> Result<Vec<Attached>, String> {
     Ok(out)
 }
 
-async fn mux_tunnel(device_id: u64, port: u16) -> Result<TcpStream, String> {
+async fn mux_open(device_id: u64, port: u16) -> Result<Result<TcpStream, u64>, String> {
     let mut s = mux_connect().await?;
     let mut d = client_dict("Connect");
     d.insert("DeviceID".into(), Value::Integer(device_id.into()));
@@ -119,9 +119,31 @@ async fn mux_tunnel(device_id: u64, port: u16) -> Result<TcpStream, String> {
     mux_send(&mut s, 2, d).await?;
     let reply = mux_recv(&mut s).await?;
     match reply.get("Number").and_then(Value::as_unsigned_integer) {
-        Some(0) => Ok(s),
-        Some(n) => Err(format!("usbmuxd Connect failed (code {n})")),
+        Some(0) => Ok(Ok(s)),
+        Some(n) => Ok(Err(n)),
         None => Err("Unexpected usbmuxd reply".into()),
+    }
+}
+
+async fn mux_tunnel(device_id: u64, port: u16) -> Result<TcpStream, String> {
+    mux_open(device_id, port).await?.map_err(|n| format!("usbmuxd Connect failed (code {n})"))
+}
+
+pub enum TunnelError {
+    Gone,
+    Refused,
+    Other(String),
+}
+
+pub async fn tunnel(udid: &str, usb_port: u16, network_port: u16) -> Result<(TcpStream, bool), TunnelError> {
+    let attached = list_attached().await.map_err(TunnelError::Other)?;
+    let device = attached.iter().find(|a| a.udid == udid).ok_or(TunnelError::Gone)?;
+    let network = device.connection != "USB";
+    let port = if network { network_port } else { usb_port };
+    match mux_open(device.device_id, port).await.map_err(TunnelError::Other)? {
+        Ok(stream) => Ok((stream, network)),
+        Err(3) => Err(TunnelError::Refused),
+        Err(n) => Err(TunnelError::Other(format!("usbmuxd Connect failed (code {n})"))),
     }
 }
 

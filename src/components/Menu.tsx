@@ -9,12 +9,13 @@ export type MenuEntry =
       label: string;
       icon?: ReactNode;
       shortcut?: string;
+      detail?: string;
       checked?: boolean;
       disabled?: boolean;
       danger?: boolean;
       onSelect: () => void;
     }
-  | { type: "submenu"; label: string; icon?: ReactNode; disabled?: boolean; entries: MenuEntry[] }
+  | { type: "submenu"; label: string; icon?: ReactNode; disabled?: boolean; checked?: boolean; entries: MenuEntry[] }
   | { type: "separator" }
   | { type: "title"; label: string };
 
@@ -107,7 +108,7 @@ function MenuPanel({ x, y, entries, minWidth, anchor, onClose, onBack, focusFirs
 
   useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
 
-  const hasChecks = entries.some((e) => e.type === "item" && e.checked !== undefined);
+  const hasChecks = entries.some((e) => (e.type === "item" || e.type === "submenu") && e.checked !== undefined);
   const subEntry = sub ? entries[sub.index] : null;
 
   return (
@@ -154,9 +155,10 @@ function MenuPanel({ x, y, entries, minWidth, anchor, onClose, onBack, focusFirs
                 }}
                 onClick={() => choose(i)}
               >
-                {hasChecks && <span className="check">{!isSub && e.checked && <Check size={13} strokeWidth={2.4} />}</span>}
+                {hasChecks && <span className="check">{e.checked && <Check size={13} strokeWidth={2.4} />}</span>}
                 {e.icon && <span className="menu-icon">{e.icon}</span>}
                 <span className="label">{e.label}</span>
+                {!isSub && e.detail && <span className="shortcut">{e.detail}</span>}
                 {!isSub && e.shortcut && <span className="shortcut">{keys(e.shortcut)}</span>}
                 {isSub && <ChevronRight size={13} className="sub-chev" />}
               </div>
