@@ -83,7 +83,11 @@ struct BaseView: View {
         case "EmptyView":
             EmptyView()
         case "Color":
-            Palette.color(node.props["color"]) ?? Color.clear
+            if let ramp = Palette.gradient(node.props["color"]?.object?["gradient"]) {
+                Rectangle().fill(ramp)
+            } else {
+                Palette.color(node.props["color"]) ?? Color.clear
+            }
         case "Rectangle", "RoundedRectangle", "Circle", "Capsule", "Ellipse":
             ShapeNode(node: node)
         case "VStack":
@@ -128,10 +132,20 @@ struct BaseView: View {
             }
         case "TabView":
             TabNode(node: node, depth: depth)
-        case "Group":
+        case "Group", "ToolbarItem":
             Group {
                 children
             }
+        case "Path":
+            PathNode(node: node)
+        case "Canvas":
+            CanvasNode(node: node)
+        case "Chart":
+            ChartNode(node: node)
+        case "Gauge":
+            GaugeNode(node: node)
+        case "SplitView":
+            SplitNode(node: node, depth: depth)
         case "Unsupported":
             UnsupportedBox(name: node.string("name") ?? "View")
         default:

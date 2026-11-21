@@ -18,11 +18,17 @@ if (!res.ok) {
   process.exit(1);
 }
 const sha = createHash("sha256").update(Buffer.from(await res.arrayBuffer())).digest("hex").toUpperCase();
-const date = new Date().toISOString().slice(0, 10);
+const release = await fetch(`https://api.github.com/repos/OnelightCyber/XWinCode/releases/tags/v${version}`);
+if (!release.ok) {
+  console.error(`Release lookup failed (${release.status}): v${version}`);
+  process.exit(1);
+}
+const date = (await release.json()).published_at.slice(0, 10);
 const out = join("src-tauri", "target", "winget", version);
 mkdirSync(out, { recursive: true });
 
-const header = (type) => `# yaml-language-server: $schema=https://aka.ms/winget-manifest.${type}.1.10.0.schema.json\n\n`;
+const schema = "1.28.0";
+const header = (type) => `# yaml-language-server: $schema=https://aka.ms/winget-manifest.${type}.${schema}.schema.json\n\n`;
 
 writeFileSync(
   join(out, `${id}.yaml`),
@@ -31,7 +37,7 @@ writeFileSync(
 PackageVersion: ${version}
 DefaultLocale: en-US
 ManifestType: version
-ManifestVersion: 1.10.0
+ManifestVersion: ${schema}
 `,
 );
 
@@ -54,7 +60,7 @@ Installers:
   InstallerUrl: ${url}
   InstallerSha256: ${sha}
 ManifestType: installer
-ManifestVersion: 1.10.0
+ManifestVersion: ${schema}
 `,
 );
 
@@ -85,7 +91,7 @@ Tags:
 - developer-tools
 ReleaseNotesUrl: ${repo}/releases/tag/v${version}
 ManifestType: defaultLocale
-ManifestVersion: 1.10.0
+ManifestVersion: ${schema}
 `,
 );
 

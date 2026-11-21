@@ -46,8 +46,30 @@ extension ViewNode {
         var mods: [Mod] = []
         for (index, item) in (object["mods"]?.array ?? []).enumerated() {
             guard let fields = item.object, let kind = fields["m"]?.string else { continue }
-            let source = kind == "tabItem" ? fields["label"] : fields["view"]
-            let nodes = nested ? list(source, parent: id, slot: "m\(index).", depth: next) : []
+            var nodes: [ViewNode] = []
+            if kind == "toolbar" {
+                for (slot, entry) in (fields["items"]?.array ?? []).prefix(32).enumerated() {
+                    guard nested, let group = entry.object else { continue }
+                    let groupID = "\(id)/m\(index).i\(slot)"
+                    nodes.append(
+                        ViewNode(
+                            id: groupID,
+                            type: "ToolbarItem",
+                            props: ["placement": group["placement"] ?? .null],
+                            children: list(group["view"], parent: groupID, slot: "c", depth: next),
+                            label: [],
+                            mods: [],
+                            event: nil,
+                            image: nil,
+                            options: [],
+                            schemed: false
+                        )
+                    )
+                }
+            } else {
+                let source = kind == "tabItem" ? fields["label"] : fields["view"]
+                nodes = nested ? list(source, parent: id, slot: "m\(index).", depth: next) : []
+            }
             mods.append(Mod(kind: kind, fields: fields, nodes: nodes))
         }
         let options = type == "Picker" && nested ? pickerOptions(props["options"], parent: id, depth: next) : []

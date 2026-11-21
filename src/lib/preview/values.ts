@@ -24,20 +24,21 @@ export type V =
   | V[]
   | { t: "dict"; m: Map<string, [V, V]> }
   | { t: "tuple"; items: V[]; labels: (string | null)[] }
-  | { t: "range"; lo: number; hi: number }
+  | { t: "range"; lo: number; hi: number; closed?: boolean }
   | { t: "sym"; name: string; type?: string; args?: EvArg[] }
   | { t: "color"; spec: ColorSpec }
   | { t: "font"; spec: FontSpec }
   | { t: "views"; nodes: ViewNode[] }
   | { t: "binding"; get: () => V; set: (v: V) => void }
-  | { t: "closure"; fn: Closure | { params: string[]; body: Stmt[] }; env: unknown; owner?: unknown }
+  | { t: "closure"; fn: Closure | { params: string[]; body: Stmt[] }; env: unknown; owner?: unknown; file?: string }
   | { t: "fn"; name: string; call: (args: EvArg[], trailing: V[]) => V }
   | { t: "rec"; type: TypeDecl; fields: Map<string, V> }
   | { t: "obj"; type: TypeDecl; fields: Map<string, V>; uid: number }
   | { t: "type"; name: string }
   | { t: "date"; ms: number }
   | { t: "keypath"; path: string[] }
-  | { t: "opaque"; name: string };
+  | { t: "opaque"; name: string; view?: boolean }
+  | { t: "host"; kind: string; get: (name: string) => V | undefined; call: (name: string, args: EvArg[], trailing: V[]) => V | undefined; copy?: () => V; data?: unknown };
 
 export type Obj<T extends string> = Extract<V, { t: T }>;
 
@@ -48,6 +49,14 @@ export function isT<T extends string>(v: V, t: T): v is Obj<T> {
 export const num = (v: V): number => (typeof v === "number" ? v : v instanceof Dbl ? v.v : typeof v === "boolean" ? (v ? 1 : 0) : Number(v) || 0);
 
 export const isNum = (v: V): boolean => typeof v === "number" || v instanceof Dbl;
+
+export function rangeEnd(r: { hi: number; closed?: boolean }): number {
+  return r.closed ? r.hi + 1 : r.hi;
+}
+
+export function inRange(r: { lo: number; hi: number; closed?: boolean }, x: number): boolean {
+  return x >= r.lo && (r.closed ? x <= r.hi : x < r.hi);
+}
 
 export function views(nodes: ViewNode[]): V {
   return { t: "views", nodes };
@@ -82,7 +91,7 @@ export function describe(v: V, nested = false): string {
     case "sym":
       return v.name;
     case "range":
-      return `${v.lo}..<${v.hi}`;
+      return `${v.lo}${v.closed ? "..." : "..<"}${v.hi}`;
     case "tuple":
       return `(${v.items.map((x, i) => (v.labels[i] ? `${v.labels[i]}: ` : "") + describe(x, true)).join(", ")})`;
     case "rec":
@@ -98,6 +107,8 @@ export function describe(v: V, nested = false): string {
       return "Font";
     case "opaque":
       return "—";
+    case "host":
+      return v.kind;
     default:
       return "";
   }
@@ -120,7 +131,7 @@ export function keyOf(v: V): string {
     case "tuple":
       return `t:(${v.items.map(keyOf).join(",")})`;
     case "range":
-      return `g:${v.lo}..<${v.hi}`;
+      return `g:${v.lo}${v.closed ? "..." : "..<"}${v.hi}`;
     case "date":
       return `d:${v.ms}`;
     default:
@@ -153,6 +164,7 @@ export function jsonOf(v: V): string | number | boolean | null {
 
 export function copyValue(v: V): V {
   if (Array.isArray(v)) return v.slice();
+  if (isT(v, "host")) return v.copy ? v.copy() : v;
   if (isT(v, "rec")) return { t: "rec", type: v.type, fields: new Map(v.fields) };
   if (isT(v, "dict")) return { t: "dict", m: new Map(v.m) };
   return v;

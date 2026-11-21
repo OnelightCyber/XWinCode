@@ -57,6 +57,42 @@ function withAlpha(css: string, alpha: number): string {
   return css;
 }
 
+const EDGES: Record<string, string> = {
+  "0.5,0>0.5,1": "to bottom",
+  "0.5,1>0.5,0": "to top",
+  "0,0.5>1,0.5": "to right",
+  "1,0.5>0,0.5": "to left",
+  "0,0>1,1": "to bottom right",
+  "1,1>0,0": "to top left",
+  "1,0>0,1": "to bottom left",
+  "0,1>1,0": "to top right",
+};
+
+export function cssPaint(spec: ColorSpec | undefined | null, dark: boolean, tint = "blue"): string | undefined {
+  const g = spec?.gradient;
+  if (!spec || !g || !g.stops.length) return cssColor(spec, dark, tint);
+  const last = g.stops.length - 1;
+  const at = (i: number) => g.stops[i].at ?? (last > 0 ? i / last : 0);
+  const paint = (i: number) => cssColor(g.stops[i].color, dark, tint) ?? "transparent";
+  if (g.kind === "radial") {
+    const [cx, cy] = g.center ?? [0.5, 0.5];
+    const r0 = g.r0 ?? 0;
+    const r1 = Math.max(g.r1 ?? 200, r0 + 1);
+    return `radial-gradient(circle ${r1}px at ${cx * 100}% ${cy * 100}%, ${g.stops.map((_, i) => `${paint(i)} ${r0 + (r1 - r0) * at(i)}px`).join(", ")})`;
+  }
+  if (g.kind === "angular") {
+    const [cx, cy] = g.center ?? [0.5, 0.5];
+    const a0 = g.a0 ?? 0;
+    const sweep = g.a1 === undefined ? 360 : g.a1 - a0;
+    return `conic-gradient(from ${90 + a0}deg at ${cx * 100}% ${cy * 100}%, ${g.stops.map((_, i) => `${paint(i)} ${sweep * at(i)}deg`).join(", ")})`;
+  }
+  const from = g.from ?? [0.5, 0];
+  const to = g.to ?? [0.5, 1];
+  const edge = EDGES[`${from[0]},${from[1]}>${to[0]},${to[1]}`];
+  const angle = (Math.atan2(to[0] - from[0], from[1] - to[1]) * 180) / Math.PI;
+  return `linear-gradient(${edge ?? `${angle}deg`}, ${g.stops.map((_, i) => `${paint(i)} ${at(i) * 100}%`).join(", ")})`;
+}
+
 export function cssColor(spec: ColorSpec | undefined | null, dark: boolean, tint = "blue"): string | undefined {
   if (!spec) return undefined;
   if ("rgba" in spec) {

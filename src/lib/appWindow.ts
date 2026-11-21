@@ -10,19 +10,17 @@ export async function appWindow() {
 
 export async function requestClose() {
   const s = useStore.getState();
+  if (s.tabs.some((p) => isDirty(p)) && s.settings?.autoSave) await s.saveAll();
   const dirty = s.tabs.filter((p) => isDirty(p));
   if (dirty.length) {
-    if (s.settings?.autoSave) await s.saveAll();
-    else {
-      const { ask } = await import("@tauri-apps/plugin-dialog");
-      const ok = await ask(tn("dialog.quitUnsaved", dirty.length), {
-        title: "XWinCode",
-        kind: "warning",
-        okLabel: t("dialog.quit"),
-        cancelLabel: t("common.cancel"),
-      });
-      if (!ok) return;
-    }
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    const ok = await ask(tn("dialog.quitUnsaved", dirty.length), {
+      title: "XWinCode",
+      kind: "warning",
+      okLabel: t("dialog.quit"),
+      cancelLabel: t("common.cancel"),
+    });
+    if (!ok) return;
   }
   if (s.task?.status === "running") await s.stop();
   await api.quitApp();

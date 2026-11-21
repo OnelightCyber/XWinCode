@@ -1,0 +1,461 @@
+{
+  "T01_UnknownContainer": {
+    "expect": [
+      "inside-unknown"
+    ]
+  },
+  "T02_OperatorFunction": {
+    "expect": [
+      "sum 6"
+    ]
+  },
+  "T03_EnumRawValue": {
+    "expect": [
+      "raw 2",
+      "Cardio",
+      "count 4",
+      "from Max"
+    ]
+  },
+  "T04_AssociatedValues": {
+    "expect": [
+      "items 2",
+      "first a",
+      "half 0.5"
+    ]
+  },
+  "T05_OptionalMap": {
+    "expect": [
+      "--",
+      "72",
+      "len 5"
+    ]
+  },
+  "T06_Observable": {
+    "expect": [
+      "count 3",
+      "doubled 6",
+      "items 2"
+    ]
+  },
+  "T07_ObservableObject": {
+    "expect": [
+      "legacy",
+      "on"
+    ]
+  },
+  "T08_GenericContainers": {
+    "expect": [
+      "card-title",
+      "card-body",
+      "panel-label",
+      "panel-body"
+    ]
+  },
+  "T09_ViewModifier": {
+    "expect": [
+      "modified-a",
+      "modified-b",
+      "modified-c"
+    ]
+  },
+  "T10_ButtonStyle": {
+    "expect": [
+      "styled-label"
+    ]
+  },
+  "T11_ViewBuilders": {
+    "expect": [
+      "header-ok",
+      "branch-b",
+      "case-two"
+    ]
+  },
+  "T12_ForEachForms": {
+    "expect": [
+      "milk",
+      "eggs",
+      "n0",
+      "n2",
+      "1 eggs",
+      "idx 2",
+      "0 milk"
+    ]
+  },
+  "T13_ListSections": {
+    "expect": [
+      "Section A",
+      "row-1",
+      "footer-a",
+      "Section B",
+      "row-2"
+    ]
+  },
+  "T14_Navigation": {
+    "expect": [
+      "nav-row-milk",
+      "toolbar-ok"
+    ]
+  },
+  "T15_TabsNew": {
+    "expect": [
+      "tab-home"
+    ],
+    "notes": []
+  },
+  "T16_Formatting": {
+    "expect": [
+      "3.1",
+      "12%",
+      "01:05",
+      "1,234",
+      "3.14",
+      "v2"
+    ]
+  },
+  "T17_Collections": {
+    "expect": [
+      "eggs",
+      "milk, tea",
+      "has true",
+      "max tea",
+      "total 2",
+      "groups 2",
+      "z 1a",
+      "s 0,5,10"
+    ]
+  },
+  "T18_SwitchExpressions": {
+    "expect": [
+      "level-high",
+      "label big"
+    ]
+  },
+  "T19_ProtocolsAndStatics": {
+    "expect": [
+      "proto-rex",
+      "REX",
+      "tag-rex",
+      "made-bo",
+      "age 3"
+    ]
+  },
+  "T20_Geometry": {
+    "expect": [
+      "geo-ok"
+    ]
+  },
+  "T21_ShapesAndCanvas": {
+    "expect": [
+      "shapes-ok"
+    ],
+    "types": [
+      "Path",
+      "Canvas"
+    ]
+  },
+  "T22_Charts": {
+    "expect": [
+      "chart-title"
+    ],
+    "types": [
+      "Chart",
+      "Mark",
+      "Gauge"
+    ]
+  },
+  "T23_Grids": {
+    "expect": [
+      "cell 0",
+      "cell 5",
+      "g-a",
+      "g-d"
+    ]
+  },
+  "T24_Decorations": {
+    "expect": [
+      "decorated",
+      "badge",
+      "inset-ok",
+      "masked"
+    ]
+  },
+  "T25_Lifecycle": {
+    "expect": [
+      "life-ok",
+      "loaded 2"
+    ]
+  },
+  "T26_Extensions": {
+    "expect": [
+      "clean 4",
+      "even true",
+      "times 12",
+      "HEY!",
+      "colored"
+    ]
+  },
+  "T27_TextForms": {
+    "expect": [
+      "ab",
+      "verbatim-ok",
+      "bold"
+    ]
+  },
+  "T28_Images": {
+    "expect": [
+      "images-ok"
+    ]
+  },
+  "T29_Controls": {
+    "expect": [
+      "controls-ok",
+      "Vanilla",
+      "Chocolate",
+      "value 0.5",
+      "qty 2"
+    ]
+  },
+  "T30_Generics": {
+    "expect": [
+      "clamp 10",
+      "pair 3"
+    ]
+  },
+  "T31_Bindings": {
+    "expect": [
+      "bound-milk",
+      "bound-eggs",
+      "manual on"
+    ]
+  },
+  "T32_Strings": {
+    "expect": [
+      "HELLO",
+      "pre hel",
+      "n 5",
+      "parts 3",
+      "swapped",
+      "trim ok",
+      "has true"
+    ]
+  },
+  "T33_Dates": {
+    "expect": [
+      "dates-ok",
+      "hour-ok"
+    ]
+  },
+  "T34_UnknownLeaf": {
+    "expect": [
+      "before-lib",
+      "after-lib"
+    ],
+    "placeholders": [
+      "LottieView",
+      "KFImage"
+    ]
+  },
+  "T35_Timeline": {
+    "expect": [
+      "timeline-ok"
+    ]
+  },
+  "T36_ExplicitInit": {
+    "expect": [
+      "avatar-zoe-30-2"
+    ]
+  },
+  "T37_ClassFeatures": {
+    "expect": [
+      "total 5",
+      "lazy-2",
+      "n 2",
+      "none 0"
+    ]
+  },
+  "T38_Styles": {
+    "expect": [
+      "styled-ok"
+    ]
+  },
+  "T39_ControlFlow": {
+    "expect": [
+      "guarded 4",
+      "early"
+    ]
+  },
+  "T40_Scroll": {
+    "expect": [
+      "scroll-0",
+      "scroll-4",
+      "pinned"
+    ]
+  },
+  "T41_SplitView": {
+    "expect": [
+      "split-side"
+    ],
+    "absent": [
+      "split-detail"
+    ]
+  },
+  "T42_Misc": {
+    "expect": [
+      "menu-label",
+      "disclosed",
+      "link-ok",
+      "cu-title"
+    ]
+  },
+  "T43_MoreCollections": {
+    "expect": [
+      "flat 4",
+      "sum 10",
+      "sorted 4321",
+      "uniq 3",
+      "last 4",
+      "cmp 3",
+      "slice 2"
+    ]
+  },
+  "T44_AsyncSequences": {
+    "expect": [
+      "async-ok"
+    ]
+  },
+  "T45_Math": {
+    "expect": [
+      "math 5",
+      "pow 8",
+      "abs 3",
+      "pi 3.14",
+      "round 3",
+      "clamp 1"
+    ]
+  },
+  "T41_SplitView@wide": {
+    "expect": [
+      "split-side",
+      "split-detail"
+    ],
+    "wide": true,
+    "types": [
+      "SplitView"
+    ]
+  },
+  "T06_Observable@tap": {
+    "expect": [
+      "count 4",
+      "doubled 8"
+    ],
+    "tap": [
+      "Bump"
+    ]
+  },
+  "L01_SwitchGuards": {
+    "expect": [
+      "big 42",
+      "wide circle"
+    ],
+    "absent": [
+      "huge",
+      "small",
+      "other"
+    ]
+  },
+  "L02_Classes": {
+    "expect": [
+      "dog",
+      "woof 3",
+      "tricks 3",
+      "is-dog",
+      "case-dog"
+    ],
+    "absent": [
+      "case-other"
+    ]
+  },
+  "L03_Ranges": {
+    "expect": [
+      "tail 3",
+      "head 2",
+      "upto 2",
+      "big 12497500",
+      "inside false",
+      "clamped 100"
+    ]
+  },
+  "L04_Accessors": {
+    "expect": [
+      "c 30",
+      "f 86",
+      "history 2"
+    ]
+  },
+  "L05_Formats": {
+    "expect": [
+      "€1,234.50",
+      "total 1,235",
+      "25.6%",
+      "year 1970",
+      "later 60"
+    ]
+  },
+  "L06_AsyncLet": {
+    "expect": [
+      "total 30"
+    ]
+  },
+  "L07_Robustness": {
+    "expect": [
+      "before",
+      "after",
+      "inside-mystery",
+      "Done",
+      "inset-text"
+    ],
+    "problems": [
+      "Index out of range"
+    ],
+    "notes": [
+      "MysteryLibraryStack"
+    ]
+  },
+  "T46_Gradients": {
+    "expect": [
+      "gradients-ok"
+    ],
+    "json": [
+      "\"kind\":\"linear\"",
+      "\"at\":0.8",
+      "\"kind\":\"radial\"",
+      "\"center\":[0.5,0.2]",
+      "\"kind\":\"angular\"",
+      "\"a1\":180"
+    ]
+  },
+  "T47_ListRows": {
+    "expect": [
+      "row-clear",
+      "row-plain"
+    ],
+    "json": [
+      "\"m\":\"rowBg\"",
+      "\"m\":\"rowSep\",\"hidden\":true",
+      "\"m\":\"rowInsets\",\"top\":6,\"leading\":20",
+      "\"m\":\"scrollBg\",\"hidden\":true"
+    ]
+  },
+  "T48_System": {
+    "expect": [
+      "os 26",
+      "cores 6",
+      "device iOS",
+      "geo sized"
+    ],
+    "json": [
+      "\"geometry\":true"
+    ]
+  }
+}

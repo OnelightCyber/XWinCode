@@ -26,6 +26,10 @@ export function extname(p: string): string {
   return i <= 0 ? "" : b.slice(i + 1).toLowerCase();
 }
 
+export function isImagePath(p: string): boolean {
+  return /^(png|jpe?g|gif|webp|bmp|svg|ico)$/.test(extname(p));
+}
+
 export function samePath(a: string, b: string): boolean {
   return normalize(a).toLowerCase() === normalize(b).toLowerCase();
 }

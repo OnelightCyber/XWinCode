@@ -1,45 +1,92 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Box,
   CaseSensitive,
   ChevronRight,
   CircleX,
+  Columns2,
+  Copy,
+  File,
   FilePlus,
   FolderOpen,
   FolderPlus,
   FolderTree,
+  GitBranch,
   Info,
+  LayoutTemplate,
   ListFilter,
   Pencil,
   RefreshCw,
+  Regex,
   Replace,
   Search,
   Settings2,
   Trash2,
   TriangleAlert,
+  WholeWord,
 } from "lucide-react";
 import { keys, locale, t, tn } from "../i18n";
 import { confirmAsk } from "../lib/dialogs";
-import { api, errorMessage } from "../lib/ipc";
+import { api, errorMessage, isTauri } from "../lib/ipc";
 import { getDoc } from "../lib/models";
 import { basename, dirname, extname, join, relative, samePath } from "../lib/paths";
 import { useStore } from "../lib/store";
-import type { Diagnostic, Entry, SearchHit } from "../lib/types";
+import type { Diagnostic, Entry, GitFileStatus, SearchHit, SearchOptions } from "../lib/types";
 import { AppGlyph } from "./AppGlyph";
 import { FileIcon } from "./FileIcon";
 import { useMenu, type MenuEntry } from "./Menu";
+import { GIT_LETTER, SourceControl } from "./SourceControl";
 import { revealInExplorer } from "./Welcome";
 
 const INDENT = 14;
 
-function swiftHeader(file: string, project: string) {
+type Template = "swift" | "view" | "model" | "empty";
+
+const TEMPLATE_LINE: Record<Template, number> = { swift: 10, view: 12, model: 12, empty: 1 };
+
+function typeName(file: string): string {
+  const stem = file.replace(/\.[^.]*$/, "").replace(/[^\p{L}\p{N}_]/gu, "");
+  const safe = /^\p{N}/u.test(stem) ? `_${stem}` : stem;
+  return safe ? safe[0].toUpperCase() + safe.slice(1) : "Untitled";
+}
+
+function fileTemplate(kind: Template, file: string, project: string): string {
+  if (kind === "empty" || extname(file) !== "swift") return "";
   const date = new Date().toLocaleDateString(locale());
-  return `//\n//  ${file}\n//  ${project}\n//\n//  ${t("tpl.createdOn", { date })}\n//\n\nimport Foundation\n\n`;
+  const head = `//\n//  ${file}\n//  ${project}\n//\n//  ${t("tpl.createdOn", { date })}\n//\n\n`;
+  const name = typeName(file);
+  if (kind === "view") return `${head}import SwiftUI\n\nstruct ${name}: View {\n    var body: some View {\n        Text("${name}")\n    }\n}\n\n#Preview {\n    ${name}()\n}\n`;
+  if (kind === "model") return `${head}import Observation\n\n@Observable\nfinal class ${name} {\n\n}\n`;
+  return `${head}import Foundation\n\n`;
+}
+
+function untitled(kind: Template): string {
+  if (kind === "view") return t("nav.untitledView");
+  if (kind === "model") return t("nav.untitledModel");
+  if (kind === "empty") return t("nav.untitledEmpty");
+  return t("nav.untitledFile");
 }
 
 interface Pending {
   kind: "file" | "folder" | "rename";
   dir: string;
   target?: string;
+  template?: Template;
+}
+
+interface Press {
+  path: string;
+  name: string;
+  isDir: boolean;
+  x: number;
+  y: number;
+}
+
+interface Drag {
+  path: string;
+  name: string;
+  isDir: boolean;
+  over: string | null;
 }
 
 function InlineInput({ initial, depth, onDone }: { initial: string; depth: number; onDone: (v: string | null) => void }) {
@@ -74,15 +121,68 @@ function InlineInput({ initial, depth, onDone }: { initial: string; depth: numbe
   );
 }
 
+function dropDir(x: number, y: number, moving: string | null): string | null {
+  const dir = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]")?.dataset.drop;
+  if (!dir) return null;
+  if (moving && (samePath(dir, dirname(moving)) || samePath(dir, moving) || dir.toLowerCase().startsWith(`${moving.toLowerCase()}\\`))) return null;
+  return dir;
+}
+
+async function moveInto(from: string, dir: string) {
+  const st = useStore.getState();
+  try {
+    const to = await api.movePath(from, dir);
+    if (samePath(to, from)) return;
+    st.toggleDir(dir, true);
+    st.pathRenamed(from, to);
+  } catch (e) {
+    st.toast("error", errorMessage(e));
+  }
+}
+
+async function importInto(sources: string[], dir: string) {
+  const st = useStore.getState();
+  try {
+    const made = await api.importPaths(sources, dir);
+    st.toggleDir(dir, true);
+    await st.loadDir(dir);
+    if (made.length) {
+      st.select(made[0]);
+      st.toast("success", tn("nav.imported", made.length));
+    }
+  } catch (e) {
+    st.toast("error", errorMessage(e));
+  }
+  st.scheduleGit();
+}
+
 function FileTree() {
   const project = useStore((s) => s.project)!;
   const dirs = useStore((s) => s.dirs);
   const expanded = useStore((s) => s.expanded);
   const selected = useStore((s) => s.selected);
   const diagnostics = useStore((s) => s.diagnostics);
-  const { toggleDir, openFile, select, loadDir, toast, pathRenamed, pathDeleted, openSheet } = useStore.getState();
+  const gitFiles = useStore((s) => s.git?.files);
+  const { toggleDir, openFile, select, loadDir, toast, pathRenamed, pathDeleted, openSheet, scheduleGit } = useStore.getState();
   const [pending, setPending] = useState<Pending | null>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const [incoming, setIncoming] = useState<string | null>(null);
+  const press = useRef<Press | null>(null);
+  const ghost = useRef<HTMLDivElement>(null);
+  const pointer = useRef({ x: 0, y: 0 });
+  const dragged = useRef(false);
   const menu = useMenu();
+
+  const changes = useMemo(() => {
+    const files = new Map<string, GitFileStatus>();
+    const folders = new Set<string>();
+    const root = project.root.toLowerCase();
+    for (const f of gitFiles ?? []) {
+      files.set(f.path.toLowerCase(), f.status);
+      for (let dir = dirname(f.path); dir.length > root.length && dir.toLowerCase().startsWith(root); dir = dirname(dir)) folders.add(dir.toLowerCase());
+    }
+    return { files, folders };
+  }, [gitFiles, project.root]);
 
   const issuesByFile = useMemo(() => {
     const m = new Map<string, { e: number; w: number }>();
@@ -109,6 +209,70 @@ function FileTree() {
     return out;
   }, [dirs, expanded, project.root]);
 
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const p = press.current;
+      if (!p) return;
+      if (!dragged.current && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 6) return;
+      dragged.current = true;
+      pointer.current = { x: e.clientX, y: e.clientY };
+      if (ghost.current) ghost.current.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 12}px)`;
+      const over = dropDir(e.clientX, e.clientY, p.path);
+      setDrag((old) => (old && old.path === p.path && old.over === over ? old : { path: p.path, name: p.name, isDir: p.isDir, over }));
+    };
+    const up = (e: MouseEvent) => {
+      const p = press.current;
+      press.current = null;
+      if (!p || !dragged.current) return;
+      const target = dropDir(e.clientX, e.clientY, p.path);
+      setDrag(null);
+      window.setTimeout(() => {
+        dragged.current = false;
+      }, 0);
+      if (target) void moveInto(p.path, target);
+    };
+    const cancel = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !press.current) return;
+      press.current = null;
+      dragged.current = false;
+      setDrag(null);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    window.addEventListener("keydown", cancel);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("keydown", cancel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/webview").then(async ({ getCurrentWebview }) => {
+      const off = await getCurrentWebview().onDragDropEvent((e) => {
+        const st = useStore.getState();
+        if (st.sheet || !st.project) return;
+        const at = (pos: { x: number; y: number }) => dropDir(pos.x / window.devicePixelRatio, pos.y / window.devicePixelRatio, null);
+        if (e.payload.type === "enter" || e.payload.type === "over") setIncoming(at(e.payload.position));
+        else if (e.payload.type === "leave") setIncoming(null);
+        else if (e.payload.type === "drop") {
+          const dir = at(e.payload.position);
+          setIncoming(null);
+          if (dir && e.payload.paths.length) void importInto(e.payload.paths, dir);
+        }
+      });
+      if (alive) unlisten = off;
+      else off();
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
   const finishPending = async (value: string | null) => {
     const p = pending;
     setPending(null);
@@ -123,16 +287,18 @@ function FileTree() {
         await api.createDir(join(p.dir, value));
         await loadDir(p.dir);
       } else {
-        const name = extname(value) ? value : `${value}.swift`;
+        const template = p.template ?? "swift";
+        const name = extname(value) || template === "empty" ? value : `${value}.swift`;
         const path = join(p.dir, name);
         if (await api.pathExists(path)) throw t("nav.fileExists");
-        await api.writeTextFile(path, extname(name) === "swift" ? swiftHeader(name, project.name) : "");
+        await api.writeTextFile(path, fileTemplate(template, name, project.name));
         await loadDir(p.dir);
-        await openFile(path, { line: 10 });
+        await openFile(path, { line: extname(name) === "swift" ? TEMPLATE_LINE[template] : 1, column: template === "view" ? 15 : 1 });
       }
     } catch (e) {
       toast("error", errorMessage(e));
     }
+    scheduleGit();
   };
 
   const remove = async (path: string) => {
@@ -144,12 +310,32 @@ function FileTree() {
     } catch (e) {
       toast("error", errorMessage(e));
     }
+    scheduleGit();
   };
 
-  const startNew = (kind: "file" | "folder", dir: string) => {
-    toggleDir(dir, true);
-    setPending({ kind, dir });
+  const duplicate = async (path: string) => {
+    try {
+      const copy = await api.duplicatePath(path);
+      await loadDir(dirname(path));
+      select(copy);
+      setPending({ kind: "rename", dir: dirname(copy), target: copy });
+    } catch (e) {
+      toast("error", errorMessage(e));
+    }
+    scheduleGit();
   };
+
+  const startNew = (kind: "file" | "folder", dir: string, template: Template = "swift") => {
+    toggleDir(dir, true);
+    setPending({ kind, dir, template });
+  };
+
+  const newFileEntries = (dir: string): MenuEntry[] => [
+    ...(project.kind === "iosApp" ? [{ type: "item", label: t("nav.newView"), icon: <LayoutTemplate size={14} />, onSelect: () => startNew("file", dir, "view") } as MenuEntry] : []),
+    { type: "item", label: t("nav.newSwift"), icon: <FilePlus size={14} />, shortcut: "Ctrl+N", onSelect: () => startNew("file", dir) },
+    { type: "item", label: t("nav.newModel"), icon: <Box size={14} />, onSelect: () => startNew("file", dir, "model") },
+    { type: "item", label: t("nav.newEmpty"), icon: <File size={14} />, onSelect: () => startNew("file", dir, "empty") },
+  ];
 
   const contextFor = (e: React.MouseEvent, entry: Entry | null) => {
     e.preventDefault();
@@ -157,13 +343,15 @@ function FileTree() {
     const dir = entry ? (entry.isDir ? entry.path : dirname(entry.path)) : project.root;
     if (entry) select(entry.path);
     const items: MenuEntry[] = [
-      { type: "item", label: t("nav.newSwiftFile"), icon: <FilePlus size={14} />, shortcut: "Ctrl+N", onSelect: () => startNew("file", dir) },
+      { type: "submenu", label: t("nav.newFile"), icon: <FilePlus size={14} />, entries: newFileEntries(dir) },
       { type: "item", label: t("nav.newFolder"), icon: <FolderPlus size={14} />, onSelect: () => startNew("folder", dir) },
       { type: "separator" },
     ];
     if (entry) {
       items.push(
         { type: "item", label: t("nav.rename"), icon: <Pencil size={14} />, shortcut: "Enter", onSelect: () => setPending({ kind: "rename", dir, target: entry.path }) },
+        ...(entry.isDir ? [] : [{ type: "item", label: t("nav.openBeside"), icon: <Columns2 size={14} />, onSelect: () => void useStore.getState().openBeside(entry.path) } as MenuEntry]),
+        { type: "item", label: t("nav.duplicate"), icon: <Copy size={14} />, shortcut: "Ctrl+D", onSelect: () => void duplicate(entry.path) },
         { type: "item", label: t("ctx.showInExplorer"), icon: <FolderOpen size={14} />, onSelect: () => void revealInExplorer(entry.path) },
         { type: "separator" },
         { type: "item", label: t("nav.trash"), icon: <Trash2 size={14} />, shortcut: "Del", danger: true, onSelect: () => void remove(entry.path) },
@@ -197,6 +385,10 @@ function FileTree() {
       setPending({ kind: "rename", dir: dirname(cur.entry.path), target: cur.entry.path });
     } else if (cur && e.key === "Delete") {
       void remove(cur.entry.path);
+    } else if (cur && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+      e.preventDefault();
+      e.stopPropagation();
+      void duplicate(cur.entry.path);
     } else if (cur && e.key === " " && !cur.entry.isDir) {
       e.preventDefault();
       void openFile(cur.entry.path);
@@ -209,10 +401,12 @@ function FileTree() {
     return () => window.removeEventListener("xwc:new-file", h);
   });
 
+  const target = drag?.over ?? incoming;
+
   const renderDir = (dir: string, depth: number): React.ReactNode[] => {
     const out: React.ReactNode[] = [];
     if (pending && pending.kind !== "rename" && samePath(pending.dir, dir)) {
-      out.push(<InlineInput key="__new" initial={pending.kind === "file" ? t("nav.untitledFile") : t("nav.newFolderName")} depth={depth} onDone={finishPending} />);
+      out.push(<InlineInput key="__new" initial={pending.kind === "file" ? untitled(pending.template ?? "swift") : t("nav.newFolderName")} depth={depth} onDone={finishPending} />);
     }
     for (const e of dirs[dir.toLowerCase()] ?? []) {
       const open = !!expanded[e.path.toLowerCase()];
@@ -220,13 +414,24 @@ function FileTree() {
         out.push(<InlineInput key={e.path} initial={e.name} depth={depth} onDone={finishPending} />);
       } else {
         const issues = issuesByFile.get(e.path.toLowerCase());
+        const change = e.isDir ? undefined : changes.files.get(e.path.toLowerCase());
+        const receiving = e.isDir && !!target && samePath(target, e.path);
         out.push(
           <div
             key={e.path}
-            className={`tree-row${selected && samePath(selected, e.path) ? " selected" : ""}`}
+            data-drop={e.isDir ? e.path : dir}
+            className={`tree-row${selected && samePath(selected, e.path) ? " selected" : ""}${receiving ? " drop-target" : ""}${drag && samePath(drag.path, e.path) ? " dragging" : ""}`}
             style={{ paddingLeft: 6 + depth * INDENT }}
-            onMouseDown={() => select(e.path)}
-            onClick={() => (e.isDir ? toggleDir(e.path) : void openFile(e.path))}
+            onMouseDown={(ev) => {
+              select(e.path);
+              if (ev.button === 0 && !pending) press.current = { path: e.path, name: e.name, isDir: e.isDir, x: ev.clientX, y: ev.clientY };
+            }}
+            onClick={(ev) => {
+              if (dragged.current) return;
+              if (e.isDir) toggleDir(e.path);
+              else if (ev.altKey) void useStore.getState().openBeside(e.path);
+              else void openFile(e.path);
+            }}
             onContextMenu={(ev) => contextFor(ev, e)}
           >
             <span className={`twist${open ? " open" : ""}`}>{e.isDir && <ChevronRight size={12} />}</span>
@@ -237,6 +442,8 @@ function FileTree() {
                 {issues.e || issues.w}
               </span>
             )}
+            {change && <span className={`git-badge s-${change}`}>{GIT_LETTER[change]}</span>}
+            {e.isDir && changes.folders.has(e.path.toLowerCase()) && <span className="git-dot" />}
           </div>,
         );
       }
@@ -246,10 +453,12 @@ function FileTree() {
   };
 
   const rootOpen = !!expanded[project.root.toLowerCase()];
+  const rootReceiving = !!target && samePath(target, project.root);
   return (
-    <div tabIndex={0} style={{ outline: "none", minHeight: "100%" }} onKeyDown={onKeyDown} onContextMenu={(e) => contextFor(e, null)}>
+    <div tabIndex={0} data-drop={project.root} className={`file-tree${rootReceiving ? " drop-root" : ""}`} onKeyDown={onKeyDown} onContextMenu={(e) => contextFor(e, null)}>
       <div
-        className={`tree-row root${selected && samePath(selected, project.root) ? " selected" : ""}`}
+        data-drop={project.root}
+        className={`tree-row root${selected && samePath(selected, project.root) ? " selected" : ""}${rootReceiving ? " drop-target" : ""}`}
         style={{ paddingLeft: 6 }}
         onMouseDown={() => select(project.root)}
         onClick={() => toggleDir(project.root)}
@@ -261,6 +470,12 @@ function FileTree() {
         <span className="name">{project.name}</span>
       </div>
       {rootOpen && renderDir(project.root, 1)}
+      {drag && (
+        <div ref={ghost} className="drag-ghost" style={{ transform: `translate(${pointer.current.x + 14}px, ${pointer.current.y + 12}px)` }}>
+          <FileIcon path={drag.path} isDir={drag.isDir} size={13} />
+          {drag.name}
+        </div>
+      )}
       {menu.node}
     </div>
   );
@@ -291,6 +506,17 @@ function FilteredFiles({ filter }: { filter: string }) {
   );
 }
 
+const WORD_SEPARATORS = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
+
+function searchPattern(query: string, options: SearchOptions, flags: string): RegExp | null {
+  const core = options.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  try {
+    return new RegExp(options.wholeWord ? `\\b(?:${core})\\b` : core, flags + (options.caseSensitive ? "" : "i"));
+  } catch {
+    return null;
+  }
+}
+
 function SearchPanel() {
   const project = useStore((s) => s.project)!;
   const openFile = useStore((s) => s.openFile);
@@ -298,9 +524,13 @@ function SearchPanel() {
   const [replacement, setReplacement] = useState("");
   const [replaceMode, setReplaceMode] = useState(false);
   const [caseSensitive, setCase] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [regex, setRegex] = useState(false);
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const options = useMemo<SearchOptions>(() => ({ caseSensitive, wholeWord, regex }), [caseSensitive, wholeWord, regex]);
+  const marker = useMemo(() => (query ? searchPattern(query, options, "") : null), [query, options]);
 
   useEffect(() => {
     const focus = () => input.current?.focus();
@@ -313,7 +543,10 @@ function SearchPanel() {
     if (!query.trim()) return setHits(null);
     setBusy(true);
     try {
-      setHits(await api.searchProject(project.root, query, caseSensitive));
+      setHits(await api.searchProject(project.root, query, options));
+    } catch (e) {
+      setHits(null);
+      useStore.getState().toast("error", errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -338,13 +571,18 @@ function SearchPanel() {
       for (const path of paths) {
         const doc = getDoc(path);
         if (doc) {
-          const matches = doc.model.findMatches(query, false, false, caseSensitive, null, false);
+          const matches = doc.model.findMatches(query, false, regex, caseSensitive, wholeWord ? WORD_SEPARATORS : null, false);
+          const single = regex ? searchPattern(query, options, "") : null;
           if (matches.length) {
-            doc.model.pushEditOperations([], matches.map((m) => ({ range: m.range, text: replacement })), () => null);
+            doc.model.pushEditOperations(
+              [],
+              matches.map((m) => ({ range: m.range, text: single ? doc.model.getValueInRange(m.range).replace(single, replacement) : replacement })),
+              () => null,
+            );
             total += matches.length;
           }
         } else {
-          total += await api.replaceInFile(path, query, replacement, caseSensitive);
+          total += await api.replaceInFile(path, query, replacement, options);
         }
       }
       touchDirty();
@@ -356,20 +594,22 @@ function SearchPanel() {
   };
 
   const highlight = (text: string) => {
-    const i = caseSensitive ? text.indexOf(query) : text.toLowerCase().indexOf(query.toLowerCase());
-    if (i < 0) return text;
+    const found = marker?.exec(text);
+    if (!found || !found[0]) return text;
+    const i = found.index;
+    const hit = found[0];
     return (
       <>
         {text.slice(0, i)}
         {replaceMode && replacement !== "" ? (
           <>
-            <del>{text.slice(i, i + query.length)}</del>
-            <ins>{replacement}</ins>
+            <del>{hit}</del>
+            <ins>{regex && marker ? hit.replace(marker, replacement) : replacement}</ins>
           </>
         ) : (
-          <mark>{text.slice(i, i + query.length)}</mark>
+          <mark>{hit}</mark>
         )}
-        {text.slice(i + query.length)}
+        {text.slice(i + hit.length)}
       </>
     );
   };
@@ -382,11 +622,19 @@ function SearchPanel() {
             <Search size={13} />
             <input ref={input} placeholder={t("search.placeholder")} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void run()} />
           </div>
+          <button className={`icon-btn${replaceMode ? " on" : ""}`} title={t("search.toggleReplace")} onClick={() => setReplaceMode(!replaceMode)}>
+            <Replace size={14} />
+          </button>
+        </div>
+        <div className="row search-options">
           <button className={`icon-btn${caseSensitive ? " on" : ""}`} title={t("search.caseSensitive")} onClick={() => setCase(!caseSensitive)}>
             <CaseSensitive size={15} />
           </button>
-          <button className={`icon-btn${replaceMode ? " on" : ""}`} title={t("search.toggleReplace")} onClick={() => setReplaceMode(!replaceMode)}>
-            <Replace size={14} />
+          <button className={`icon-btn${wholeWord ? " on" : ""}`} title={t("search.wholeWord")} onClick={() => setWholeWord(!wholeWord)}>
+            <WholeWord size={15} />
+          </button>
+          <button className={`icon-btn${regex ? " on" : ""}`} title={t("search.regex")} onClick={() => setRegex(!regex)}>
+            <Regex size={14} />
           </button>
         </div>
         {replaceMode && (
@@ -481,6 +729,7 @@ export function Navigator({ width }: { width: number }) {
   const setNavTab = useStore((s) => s.setNavTab);
   const project = useStore((s) => s.project);
   const errors = useStore((s) => s.diagnostics.filter((d) => d.severity === "error").length);
+  const pendingChanges = useStore((s) => s.git?.files.length ?? 0);
   const [filter, setFilter] = useState("");
 
   return (
@@ -488,6 +737,10 @@ export function Navigator({ width }: { width: number }) {
       <div className="nav-tabs">
         <button className={`icon-btn${tab === "project" ? " on" : ""}`} title={`${t("nav.projectTab")} (${keys("Ctrl+1")})`} onClick={() => setNavTab("project")}>
           <FolderTree size={16} />
+        </button>
+        <button className={`icon-btn${tab === "git" ? " on" : ""}`} title={`${t("nav.gitTab")} (${keys("Ctrl+2")})`} onClick={() => setNavTab("git")}>
+          <GitBranch size={16} />
+          {pendingChanges > 0 && <span className="dot quiet">{pendingChanges > 99 ? "99+" : pendingChanges}</span>}
         </button>
         <button className={`icon-btn${tab === "search" ? " on" : ""}`} title={`${t("nav.searchTab")} (${keys("Ctrl+Shift+F")})`} onClick={() => setNavTab("search")}>
           <Search size={16} />
@@ -506,6 +759,8 @@ export function Navigator({ width }: { width: number }) {
           ) : (
             <FileTree />
           )
+        ) : tab === "git" ? (
+          <SourceControl />
         ) : tab === "search" ? (
           <SearchPanel />
         ) : (

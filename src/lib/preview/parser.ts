@@ -19,7 +19,7 @@ export interface Closure {
 
 export interface StrExpr {
   k: "str";
-  parts: (string | { e: Expr; fmt: string | null })[];
+  parts: (string | { e: Expr; fmt: string | null; style?: Expr })[];
   pos: number;
 }
 
@@ -46,6 +46,7 @@ export type Cond = { k: "expr"; e: Expr } | { k: "let"; name: string; e: Expr } 
 
 export interface SwitchCase {
   patterns: Expr[] | null;
+  guards: (Expr | null)[];
   body: Stmt[];
 }
 
@@ -55,7 +56,7 @@ export type Stmt =
   | { k: "assign"; target: Expr; op: string; value: Expr; pos: number }
   | { k: "if"; conds: Cond[]; then: Stmt[]; else: Stmt[] | null; pos: number }
   | { k: "guard"; conds: Cond[]; else: Stmt[]; pos: number }
-  | { k: "for"; names: string[]; seq: Expr; body: Stmt[]; pos: number }
+  | { k: "for"; names: string[]; seq: Expr; where: Expr | null; body: Stmt[]; pos: number }
   | { k: "while"; cond: Expr; body: Stmt[]; pos: number }
   | { k: "switch"; subject: Expr; cases: SwitchCase[]; pos: number }
   | { k: "return"; e: Expr | null; pos: number }
@@ -63,15 +64,25 @@ export type Stmt =
   | { k: "continue"; pos: number }
   | { k: "seq"; body: Stmt[]; pos: number };
 
+export interface Accessor {
+  param: string;
+  body: Stmt[];
+}
+
 export interface Property {
   name: string;
   attrs: string[];
   isStatic: boolean;
+  isLazy: boolean;
   mutable: boolean;
   type: string | null;
   init: Expr | null;
   getter: Stmt[] | null;
+  setter: Accessor | null;
+  didSet: Accessor | null;
+  willSet: Accessor | null;
   pos: number;
+  file?: string;
 }
 
 export interface Param {
@@ -86,7 +97,9 @@ export interface Method {
   params: Param[];
   body: Stmt[];
   isStatic: boolean;
+  ret: string | null;
   pos: number;
+  file?: string;
 }
 
 export interface EnumCase {
@@ -105,6 +118,12 @@ export interface TypeDecl {
   main: boolean;
   attrs: string[];
   pos: number;
+  file?: string;
+}
+
+export interface ProtocolDecl {
+  name: string;
+  inherits: string[];
 }
 
 export interface PreviewDecl {
@@ -115,9 +134,14 @@ export interface PreviewDecl {
 
 export interface FileAST {
   types: TypeDecl[];
+  protocols: ProtocolDecl[];
   previews: PreviewDecl[];
   funcs: Method[];
   globals: Property[];
+}
+
+export function emptyAST(): FileAST {
+  return { types: [], protocols: [], previews: [], funcs: [], globals: [] };
 }
 
 const MODIFIERS = new Set([
@@ -174,6 +198,10 @@ const BINARY: Record<string, number> = {
 };
 
 const ASSIGN = new Set(["=", "+=", "-=", "*=", "/=", "%=", "&+=", "&-=", "&*=", "<<=", ">>=", "^=", "|=", "&="]);
+
+const ACCESSORS = new Set(["get", "set", "willSet", "didSet", "_read", "_modify"]);
+
+type Accessors = Pick<Property, "getter" | "setter" | "didSet" | "willSet">;
 
 const MAX_DEPTH = 400;
 const TOO_DEEP = "This code is nested too deeply to preview";
@@ -301,7 +329,7 @@ class Parser {
     let end = start;
     while (!this.atEnd()) {
       const tok = this.tok;
-      if (depth === 0 && stop(tok)) break;
+      if (depth === 0 && (stop(tok) || (tok.kind === "punct" && (tok.value === "}" || tok.value === ";")))) break;
       if (tok.value === "<" || tok.value === "(" || tok.value === "[") depth++;
       else if (tok.value === ">" || tok.value === ")" || tok.value === "]") {
         if (depth === 0) break;
@@ -322,7 +350,7 @@ class Parser {
   }
 
   file(): FileAST {
-    const ast: FileAST = { types: [], previews: [], funcs: [], globals: [] };
+    const ast = emptyAST();
     while (!this.atEnd()) {
       const before = this.i;
       try {
@@ -396,11 +424,20 @@ class Parser {
       case "extension":
         ast.types.push(this.typeDecl(attrs));
         return;
-      case "protocol":
+      case "protocol": {
         this.next();
+        const name = this.kindIs("id") ? this.next().value : "";
+        const inherits: string[] = [];
+        if (this.eat(":")) {
+          do {
+            inherits.push(this.typeText((t) => t.value === "," || t.value === "{" || t.value === "where"));
+          } while (this.eat(","));
+        }
         while (!this.isPunct("{") && !this.atEnd()) this.next();
         this.skipBalanced("{", "}");
+        if (name) ast.protocols.push({ name, inherits });
         return;
+      }
       case "typealias":
         this.next();
         while (!this.tok.nl && !this.atEnd()) this.next();
@@ -410,7 +447,7 @@ class Parser {
         return;
       case "let":
       case "var":
-        ast.globals.push(this.property(attrs, false));
+        ast.globals.push(this.property(attrs, false, false));
         return;
       default:
         this.next();
@@ -448,6 +485,7 @@ class Parser {
       main: attrs.includes("main"),
       attrs,
       pos: kw.pos,
+      file: this.fileId,
     };
     this.expect("{");
     while (!this.isPunct("}") && !this.atEnd()) {
@@ -469,12 +507,14 @@ class Parser {
   private member(decl: TypeDecl) {
     const attrs: string[] = [];
     let isStatic = false;
+    let isLazy = false;
     for (;;) {
       if (this.kindIs("attr")) {
         const name = this.next().value;
         attrs.push(name + this.skipAttrArgs());
       } else if (this.kindIs("id") && MODIFIERS.has(this.tok.value)) {
         if (this.tok.value === "static") isStatic = true;
+        if (this.tok.value === "lazy") isLazy = true;
         this.next();
         if (this.isPunct("(")) this.skipBalanced("(", ")");
       } else if (this.isKw("class") && ["var", "func", "let"].includes(this.peek().value)) {
@@ -495,7 +535,7 @@ class Parser {
     switch (tok.value) {
       case "var":
       case "let":
-        decl.props.push(this.property(attrs, isStatic));
+        decl.props.push(this.property(attrs, isStatic, isLazy));
         return;
       case "func":
         decl.methods.push(this.method(isStatic));
@@ -506,7 +546,7 @@ class Parser {
         const params = this.params();
         if (this.isKw("throws") || this.isKw("async")) this.next();
         const body = this.isPunct("{") ? this.block() : [];
-        decl.inits.push({ name: "init", params, body, isStatic: false, pos: tok.pos });
+        decl.inits.push({ name: "init", params, body, isStatic: false, ret: null, pos: tok.pos, file: this.fileId });
         return;
       }
       case "case":
@@ -527,8 +567,17 @@ class Parser {
         this.nested.push(this.typeDecl(attrs));
         return;
       }
+      case "subscript": {
+        this.next();
+        if (this.tok.value === "<") this.skipBalanced("<", ">");
+        const params = this.params();
+        const ret = this.eat("->") ? this.typeText((t) => t.value === "{" || t.value === "where") : null;
+        if (this.isKw("where")) while (!this.isPunct("{") && !this.atEnd()) this.next();
+        const body = this.isPunct("{") ? (this.accessors(true).getter ?? []) : [];
+        decl.methods.push({ name: "subscript", params, body, isStatic, ret, pos: tok.pos, file: this.fileId });
+        return;
+      }
       case "deinit":
-      case "subscript":
       case "typealias":
       case "associatedtype":
         this.next();
@@ -540,7 +589,7 @@ class Parser {
     }
   }
 
-  private property(attrs: string[], isStatic: boolean): Property {
+  private property(attrs: string[], isStatic: boolean, isLazy: boolean): Property {
     const kw = this.next();
     let name: string;
     if (this.isPunct("(")) {
@@ -550,38 +599,58 @@ class Parser {
     let type: string | null = null;
     if (this.eat(":")) type = this.typeText((t) => t.value === "=" || t.value === "{" || t.value === ",");
     let init: Expr | null = null;
-    let getter: Stmt[] | null = null;
+    let acc: Accessors = { getter: null, setter: null, didSet: null, willSet: null };
     if (this.eat("=")) init = this.expr();
-    if (this.isPunct("{") && (!this.tok.nl || init === null)) {
-      if (init === null) getter = this.accessorBlock();
-      else this.skipBalanced("{", "}");
-    }
+    if (this.isPunct("{") && (!this.tok.nl || init === null)) acc = this.accessors(init === null);
     while (this.eat(",")) {
       this.ident();
       if (this.eat(":")) this.typeText((t) => t.value === "=" || t.value === ",");
       if (this.eat("=")) this.expr();
     }
-    return { name, attrs, isStatic, mutable: kw.value === "var", type, init, getter, pos: kw.pos };
+    return { name, attrs, isStatic, isLazy, mutable: kw.value === "var", type, init, ...acc, pos: kw.pos, file: this.fileId };
   }
 
-  private accessorBlock(): Stmt[] {
+  private observerAhead(): boolean {
+    const next = this.peek();
+    return next.kind === "id" && (next.value === "didSet" || next.value === "willSet") && ["{", "("].includes(this.peek(2).value);
+  }
+
+  private accessors(allowBody: boolean): Accessors {
+    const out: Accessors = { getter: null, setter: null, didSet: null, willSet: null };
     const save = this.i;
     this.expect("{");
-    if (this.isKw("get") || this.isKw("set") || this.isKw("willSet") || this.isKw("didSet")) {
-      let getter: Stmt[] = [];
-      while (!this.isPunct("}") && !this.atEnd()) {
-        const which = this.ident();
-        if (this.isPunct("(")) this.skipBalanced("(", ")");
-        if (which === "get") {
-          if (this.isKw("async") || this.isKw("throws")) this.next();
-          getter = this.block();
-        } else if (this.isPunct("{")) this.skipBalanced("{", "}");
-      }
-      this.expect("}");
-      return getter;
+    let j = this.i;
+    const last = this.t.length - 1;
+    while (j < last && (this.t[j].kind === "attr" || (this.t[j].kind === "id" && (this.t[j].value === "mutating" || this.t[j].value === "nonmutating")))) j++;
+    const head = this.t[j];
+    const after = this.t[Math.min(j + 1, last)];
+    const isAccessor = head.kind === "id" && ACCESSORS.has(head.value) && (["{", "(", "}", "async", "throws", "get", "set"].includes(after.value) || after.nl);
+    if (!isAccessor) {
+      this.i = save;
+      if (allowBody) out.getter = this.block();
+      else this.skipBalanced("{", "}");
+      return out;
     }
-    this.i = save;
-    return this.block();
+    while (!this.isPunct("}") && !this.atEnd()) {
+      while (this.kindIs("attr") || this.isKw("mutating") || this.isKw("nonmutating")) this.next();
+      const which = this.ident();
+      let param: string | null = null;
+      if (this.isPunct("(")) {
+        this.next();
+        if (this.kindIs("id")) param = this.next().value;
+        while (!this.isPunct(")") && !this.atEnd()) this.next();
+        this.expect(")");
+      }
+      while (this.isKw("async") || this.isKw("throws")) this.next();
+      if (!this.isPunct("{")) continue;
+      const body = this.block();
+      if (which === "get" || which === "_read") out.getter = body;
+      else if (which === "set" || which === "_modify") out.setter = { param: param ?? "newValue", body };
+      else if (which === "didSet") out.didSet = { param: param ?? "oldValue", body };
+      else if (which === "willSet") out.willSet = { param: param ?? "newValue", body };
+    }
+    this.expect("}");
+    return out;
   }
 
   private params(): Param[] {
@@ -613,11 +682,14 @@ class Parser {
     const name = this.kindIs("id") ? this.ident() : this.next().value;
     if (this.tok.value === "<") this.skipBalanced("<", ">");
     const params = this.params();
-    while (this.isKw("async") || this.isKw("throws") || this.isKw("rethrows")) this.next();
-    if (this.eat("->")) this.typeText((t) => t.value === "{" || t.value === "where");
+    while (this.isKw("async") || this.isKw("throws") || this.isKw("rethrows")) {
+      this.next();
+      if (this.isPunct("(")) this.skipBalanced("(", ")");
+    }
+    const ret = this.eat("->") ? this.typeText((t) => t.value === "{" || t.value === "where") : null;
     if (this.isKw("where")) while (!this.isPunct("{") && !this.atEnd()) this.next();
     const body = this.isPunct("{") ? this.block() : [];
-    return { name, params, body, isStatic, pos: kw.pos };
+    return { name, params, body, isStatic, ret, pos: kw.pos, file: this.fileId };
   }
 
   block(): Stmt[] {
@@ -655,7 +727,8 @@ class Parser {
       return this.stmt();
     }
     if (tok.kind === "id") {
-      switch (tok.value) {
+      if (tok.value === "async" && (this.peek().value === "let" || this.peek().value === "var")) this.next();
+      switch (this.tok.value) {
         case "let":
         case "var": {
           this.next();
@@ -703,7 +776,9 @@ class Parser {
         }
         case "for": {
           this.next();
+          while (this.isKw("try") || this.isKw("await")) this.next();
           if (this.isKw("case")) this.next();
+          if (this.isKw("let") || this.isKw("var")) this.next();
           const names: string[] = [];
           if (this.isPunct("(")) {
             this.next();
@@ -717,11 +792,12 @@ class Parser {
           if (!this.isKw("in")) throw new SyntaxError("Expected 'in'", this.tok.pos);
           this.next();
           const seq = this.expr(true);
+          let where: Expr | null = null;
           if (this.isKw("where")) {
             this.next();
-            this.expr(true);
+            where = this.expr(true);
           }
-          return { k: "for", names, seq, body: this.block(), pos: tok.pos };
+          return { k: "for", names, seq, where, body: this.block(), pos: tok.pos };
         }
         case "while": {
           this.next();
@@ -796,6 +872,7 @@ class Parser {
     const cases: SwitchCase[] = [];
     while (!this.isPunct("}") && !this.atEnd()) {
       let patterns: Expr[] | null;
+      const guards: (Expr | null)[] = [];
       while (this.kindIs("attr")) this.next();
       if (this.isKw("default")) {
         this.next();
@@ -806,11 +883,14 @@ class Parser {
         patterns = [];
         do {
           if (this.isKw("let") || this.isKw("var")) this.next();
-          patterns.push(this.expr(true));
+          if (this.isKw("is")) {
+            const at = this.next().pos;
+            patterns.push({ k: "call", callee: { k: "id", name: "__type", pos: at }, args: [{ label: null, value: { k: "str", parts: [this.castType()], pos: at } }], trailing: [], pos: at });
+          } else patterns.push(this.expr(true));
           if (this.isKw("where")) {
             this.next();
-            this.expr(true);
-          }
+            guards.push(this.expr(true));
+          } else guards.push(null);
         } while (this.eat(","));
       }
       this.expect(":");
@@ -821,7 +901,7 @@ class Parser {
         body.push(this.stmt());
         if (this.i === before) this.next();
       }
-      cases.push({ patterns, body });
+      cases.push({ patterns, guards, body });
     }
     this.expect("}");
     return { k: "switch", subject, cases, pos: tok.pos };
@@ -870,9 +950,11 @@ class Parser {
       const tok = this.tok;
       if (tok.kind === "id" && (tok.value === "as" || tok.value === "is")) {
         this.next();
-        if (this.is("?") || this.is("!")) this.next();
+        const conditional = this.is("?");
+        if (conditional || this.is("!")) this.next();
         const type = this.castType();
-        if (tok.value === "is") left = { k: "call", callee: { k: "id", name: "__is", pos: tok.pos }, args: [{ label: null, value: left }, { label: null, value: { k: "str", parts: [type], pos: tok.pos } }], trailing: [], pos: tok.pos };
+        const check = tok.value === "is" ? "__is" : conditional ? "__cast" : null;
+        if (check) left = { k: "call", callee: { k: "id", name: check, pos: tok.pos }, args: [{ label: null, value: left }, { label: null, value: { k: "str", parts: [type], pos: tok.pos } }], trailing: [], pos: tok.pos };
         continue;
       }
       if (tok.kind !== "op") break;
@@ -880,6 +962,10 @@ class Parser {
       if (prec === undefined || prec < min) break;
       if (tok.nl && tok.value !== "&&" && tok.value !== "||" && tok.value !== "??" && tok.value !== "+") break;
       this.next();
+      if (tok.value === "..." && (this.isPunct(")") || this.isPunct("]") || this.isPunct(",") || this.isPunct(":") || this.isPunct("{") || this.atEnd() || this.tok.nl)) {
+        left = { k: "bin", op: "...", l: left, r: { k: "num", v: Infinity, float: false, pos: tok.pos }, pos: tok.pos };
+        continue;
+      }
       const right = this.binary(prec + 1, noTrailing);
       left = { k: "bin", op: tok.value, l: left, r: right, pos: tok.pos };
     }
@@ -937,11 +1023,11 @@ class Parser {
       this.next();
       return { k: "id", name: tok.value, pos: tok.pos };
     }
-    if (tok.kind === "op" && ["!", "-", "+", "~", "&", "..."].includes(tok.value)) {
+    if (tok.kind === "op" && ["!", "-", "+", "~", "&", "...", "..<"].includes(tok.value)) {
       this.next();
       const e = this.unary(noTrailing);
       if (tok.value === "&" || tok.value === "+") return e;
-      if (tok.value === "...") return { k: "bin", op: "...", l: { k: "num", v: 0, float: false, pos: tok.pos }, r: e, pos: tok.pos };
+      if (tok.value === "..." || tok.value === "..<") return { k: "bin", op: tok.value, l: { k: "num", v: -Infinity, float: false, pos: tok.pos }, r: e, pos: tok.pos };
       return { k: "un", op: tok.value, e, pos: tok.pos };
     }
     if (this.isKw("try") || this.isKw("await")) {
@@ -1051,17 +1137,19 @@ class Parser {
     return { k: "str", parts, pos: tok.pos };
   }
 
-  private interpolation(chunk: StrChunk): { e: Expr; fmt: string | null } {
+  private interpolation(chunk: StrChunk): { e: Expr; fmt: string | null; style?: Expr } {
     const sub = new Parser(lex(this.src.slice(chunk.pos, chunk.pos + chunk.code.length), chunk.pos), this.src, this.fileId, this.depth);
     const value = sub.expr();
     let fmt: string | null = null;
+    let style: Expr | undefined;
     while (sub.eat(",")) {
       const label = sub.tok.kind === "id" && sub.peek().value === ":" ? sub.ident() : null;
       if (label) sub.expect(":");
       const arg = sub.expr();
       if (label === "specifier" && arg.k === "str") fmt = arg.parts.filter((x) => typeof x === "string").join("");
+      if (label === "format" || label === "style") style = arg;
     }
-    return { e: value, fmt };
+    return style ? { e: value, fmt, style } : { e: value, fmt };
   }
 
   private arrayExpr(): Expr {
@@ -1175,7 +1263,7 @@ class Parser {
         e = { k: "sub", base: e, args, pos: tok.pos };
         continue;
       }
-      if (tok.kind === "punct" && tok.value === "{" && !tok.nl && !noTrailing) {
+      if (tok.kind === "punct" && tok.value === "{" && !tok.nl && !noTrailing && !this.observerAhead()) {
         e = this.trailing({ k: "call", callee: e, args: [], trailing: [], pos: e.pos }, noTrailing);
         continue;
       }
@@ -1190,7 +1278,7 @@ class Parser {
 
   private trailing(call: Extract<Expr, { k: "call" }>, noTrailing: boolean): Expr {
     if (noTrailing) return call;
-    if (this.isPunct("{") && !this.tok.nl) {
+    if (this.isPunct("{") && !this.tok.nl && !this.observerAhead()) {
       call.trailing.push({ label: null, fn: this.closure() });
       while (this.kindIs("id") && this.peek().value === ":" && this.peek(2).value === "{" && !this.peek(2).nl) {
         const label = this.next().value;
@@ -1214,7 +1302,7 @@ export function parseSwift(src: string, file?: string): ParseResult {
     tokens = lex(src);
   } catch (e) {
     if (e instanceof SyntaxError) {
-      return { ast: { types: [], previews: [], funcs: [], globals: [] }, errors: [{ message: e.message, pos: e.pos }] };
+      return { ast: emptyAST(), errors: [{ message: e.message, pos: e.pos }] };
     }
     throw e;
   }

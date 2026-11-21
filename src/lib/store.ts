@@ -3,9 +3,10 @@ import { t, tn, type TKey } from "../i18n";
 import { askTrust, confirmAsk, saveChoice } from "./dialogs";
 import { relativeTime } from "./format";
 import { api, errorMessage } from "./ipc";
+import { setGitContext, touchGitMarks } from "./git";
 import { formatModel, startLsp, stopLsp } from "./lsp";
-import { allDocs, createDoc, disposeAll, disposeDoc, getDoc, isDirty, markSaved } from "./models";
-import { basename, dirname, join, normalize, samePath } from "./paths";
+import { allDocs, createDoc, disposeAll, disposeDoc, getDoc, isDirty, markSaved, moveDoc, syncDoc } from "./models";
+import { basename, dirname, isImagePath, join, normalize, samePath } from "./paths";
 import { findUpdate, installUpdate, type UpdateInfo } from "./updater";
 import type {
   BuildAction,
@@ -15,6 +16,7 @@ import type {
   DeviceLine,
   Diagnostic,
   Entry,
+  GitStatus,
   InstallRecord,
   LogLine,
   ProjectInfo,
@@ -31,7 +33,7 @@ export interface TerminalTab {
   shell: "powershell" | "cmd" | "wsl";
   title: string;
 }
-export type NavTab = "project" | "search" | "issues";
+export type NavTab = "project" | "git" | "search" | "issues";
 export type SettingsTab = "general" | "appearance" | "editor" | "terminal" | "build" | "devices" | "tools" | "shortcuts" | "about";
 export type WslState = "idle" | "starting" | "ready" | "error";
 export type DebugTab = "console" | "device" | number;
@@ -112,6 +114,13 @@ interface State {
 
   installs: InstallRecord[];
 
+  git: GitStatus | null;
+  gitBusy: boolean;
+  fsTick: number;
+  compare: string | null;
+  side: string | null;
+  sideFocus: boolean;
+
   update: UpdateInfo | null;
   updateState: UpdateState;
   updateProgress: number | null;
@@ -134,8 +143,9 @@ interface Actions {
   closeTab(path: string): Promise<void>;
   setActive(path: string): void;
   touchDirty(): void;
-  save(path?: string, options?: { format?: boolean }): Promise<void>;
-  saveAll(): Promise<void>;
+  save(path?: string, options?: { format?: boolean }): Promise<boolean>;
+  saveAll(): Promise<boolean>;
+  syncDisk(): Promise<void>;
   build(action: BuildAction): Promise<void>;
   stop(): Promise<void>;
   refreshDevices(): Promise<void>;
@@ -169,6 +179,14 @@ interface Actions {
   appendDeviceLog(session: number, lines: string[]): void;
   endDeviceLog(session: number): void;
 
+  refreshGit(): Promise<void>;
+  scheduleGit(): void;
+  gitRun<T>(op: (root: string) => Promise<T>): Promise<T | undefined>;
+  setCompare(path: string | null): void;
+  openBeside(path?: string): Promise<void>;
+  closeBeside(): void;
+  setSideFocus(on: boolean): void;
+
   refreshInstalls(): Promise<void>;
   recordInstall(target: TaskTarget, appPath: string | null): Promise<void>;
   reinstall(record: InstallRecord): Promise<void>;
@@ -184,7 +202,12 @@ let deviceLineId = 0;
 let terminalKey = 0;
 let toastId = 0;
 const k = (p: string) => p.toLowerCase();
+const writes = new Map<string, Promise<boolean>>();
+let lastSync = 0;
 const remindedInstalls = new Set<string>();
+let gitFlight: Promise<void> | null = null;
+let gitAgain = false;
+let gitTimer = 0;
 let trustFlow: Promise<boolean> | null = null;
 
 function defaultDestination(project: ProjectInfo, devices: Device[]): Destination {
@@ -270,6 +293,12 @@ export const useStore = create<Store>((set, get) => ({
   deviceLogFilter: "app",
 
   installs: [],
+  git: null,
+  gitBusy: false,
+  fsTick: 0,
+  compare: null,
+  side: null,
+  sideFocus: false,
 
   update: null,
   updateState: "idle",
@@ -371,6 +400,7 @@ export const useStore = create<Store>((set, get) => ({
     const s = await api.getSettings().catch(() => null);
     if (s) set({ settings: s });
     document.title = `${info.name} — XWinCode`;
+    void get().refreshGit();
     if (!trusted) void get().ensureTrusted();
   },
 
@@ -398,6 +428,7 @@ export const useStore = create<Store>((set, get) => ({
       set({ trusted: true });
       const booting = project.kind === "iosApp" && get().wsl !== "ready";
       void startLsp(project, booting ? t("lsp.wslBooting") : undefined);
+      void get().refreshGit();
       return true;
     })().finally(() => {
       trustFlow = null;
@@ -406,19 +437,16 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   async closeProject() {
+    if (get().tabs.some((p) => isDirty(p)) && get().settings?.autoSave) await get().saveAll();
     const dirty = get().tabs.filter((p) => isDirty(p));
-    if (dirty.length) {
-      if (get().settings?.autoSave) {
-        await get().saveAll();
-      } else if (!(await confirmAsk(tn("dialog.closeUnsaved", dirty.length), t("dialog.close")))) {
-        return false;
-      }
-    }
+    if (dirty.length && !(await confirmAsk(tn("dialog.closeUnsaved", dirty.length), t("dialog.close")))) return false;
     if (get().task?.status === "running") await api.stopTask().catch(() => undefined);
     if (get().deviceLogState === "live" || get().deviceLogState === "starting") await get().stopDeviceLog();
     disposeAll();
     void stopLsp();
-    set({ project: null, trusted: false, tabs: [], active: null, dirs: {}, expanded: {}, diagnostics: [], log: [], task: null, deviceLog: [] });
+    window.clearTimeout(gitTimer);
+    setGitContext(null, null);
+    set({ project: null, trusted: false, tabs: [], active: null, dirs: {}, expanded: {}, diagnostics: [], log: [], task: null, deviceLog: [], git: null, compare: null, side: null, sideFocus: false });
     document.title = "XWinCode";
     return true;
   },
@@ -446,6 +474,7 @@ export const useStore = create<Store>((set, get) => ({
       .filter(([, v]) => v)
       .map(([p]) => p);
     await Promise.all(open.map((p) => get().loadDir(p)));
+    get().scheduleGit();
   },
 
   select(path) {
@@ -455,6 +484,10 @@ export const useStore = create<Store>((set, get) => ({
   async openFile(rawPath, at) {
     const path = normalize(rawPath);
     const { tabs } = get();
+    if (isImagePath(path)) {
+      set({ tabs: tabs.some((p) => samePath(p, path)) ? tabs : [...tabs, path], active: path, selected: path });
+      return;
+    }
     if (!getDoc(path)) {
       try {
         const content = await api.readTextFile(path);
@@ -466,22 +499,27 @@ export const useStore = create<Store>((set, get) => ({
     }
     const nextTabs = tabs.some((p) => samePath(p, path)) ? tabs : [...tabs, path];
     set({ tabs: nextTabs, active: path, selected: path });
+    touchGitMarks(path, 0);
     if (at) set({ reveal: { path, line: at.line, column: at.column ?? 1, endLine: at.endLine, endColumn: at.endColumn, nonce: Date.now() } });
   },
 
   async closeTab(path) {
+    if (isDirty(path) && get().settings?.autoSave) await get().save(path);
     if (isDirty(path)) {
-      const choice = get().settings?.autoSave ? "save" : await saveChoice(basename(path));
+      const choice = await saveChoice(basename(path));
       if (choice === "cancel") return;
-      if (choice === "save") await get().save(path);
+      if (choice === "save" && (!(await get().save(path)) || isDirty(path))) return;
     }
+    await writes.get(k(path));
     const { tabs, active } = get();
     const idx = tabs.findIndex((p) => samePath(p, path));
     const nextTabs = tabs.filter((p) => !samePath(p, path));
     let nextActive = active;
     if (active && samePath(active, path)) nextActive = nextTabs[Math.min(idx, nextTabs.length - 1)] ?? null;
     disposeDoc(path);
-    set({ tabs: nextTabs, active: nextActive });
+    const { compare, side } = get();
+    const beside = side && samePath(side, path) ? null : side;
+    set({ tabs: nextTabs, active: nextActive, compare: compare && samePath(compare, path) ? null : compare, side: beside, sideFocus: beside ? get().sideFocus : false });
   },
 
   setActive(path) {
@@ -494,24 +532,149 @@ export const useStore = create<Store>((set, get) => ({
 
   async save(path, options) {
     const target = path ?? get().active;
-    if (!target) return;
+    if (!target) return true;
     const doc = getDoc(target);
-    if (!doc) return;
+    if (!doc) return true;
     const prefs = get().settings;
     if (options?.format && prefs?.formatOnSave && /\.swift$/i.test(target)) {
       await formatModel(doc.model, { tabSize: prefs.tabSize ?? 4, insertSpaces: prefs.insertSpaces ?? true }).catch(() => false);
     }
+    const key = k(target);
+    const previous = writes.get(key);
+    const run = (async () => {
+      if (previous) await previous;
+      if (getDoc(target) !== doc) return false;
+      const version = doc.model.getAlternativeVersionId();
+      const text = doc.model.getValue();
+      try {
+        await api.writeTextFile(target, text);
+      } catch (e) {
+        get().toast("error", t("toast.saveFailed", { error: errorMessage(e) }));
+        return false;
+      }
+      if (getDoc(target) === doc) {
+        markSaved(target, version, text);
+        get().touchDirty();
+      }
+      get().scheduleGit();
+      return true;
+    })();
+    writes.set(key, run);
     try {
-      await api.writeTextFile(target, doc.model.getValue());
-      markSaved(target);
-      get().touchDirty();
-    } catch (e) {
-      get().toast("error", t("toast.saveFailed", { error: errorMessage(e) }));
+      return await run;
+    } finally {
+      if (writes.get(key) === run) writes.delete(key);
     }
   },
 
   async saveAll() {
-    await Promise.all(allDocs().filter((d) => isDirty(d.path)).map((d) => get().save(d.path)));
+    const results = await Promise.all(
+      allDocs()
+        .filter((d) => isDirty(d.path))
+        .map((d) => get().save(d.path)),
+    );
+    return results.every(Boolean) && !allDocs().some((d) => isDirty(d.path));
+  },
+
+  async syncDisk() {
+    const now = Date.now();
+    if (now - lastSync < 1500) return;
+    lastSync = now;
+    const conflicts: string[] = [];
+    let reloaded = false;
+    await Promise.all(
+      allDocs().map(async (d) => {
+        if (writes.has(k(d.path))) return;
+        let text: string;
+        try {
+          text = await api.readTextFile(d.path);
+        } catch {
+          return;
+        }
+        if (writes.has(k(d.path)) || getDoc(d.path) !== d) return;
+        const outcome = syncDoc(d.path, text);
+        if (outcome === "conflict") conflicts.push(basename(d.path));
+        if (outcome === "reloaded") reloaded = true;
+      }),
+    );
+    if (reloaded) get().touchDirty();
+    if (conflicts.length) get().toast("info", t("toast.changedOnDisk", { name: conflicts.join(", ") }));
+    void get().refreshGit();
+  },
+
+  refreshGit() {
+    if (gitFlight) {
+      gitAgain = true;
+      return gitFlight;
+    }
+    const run = async () => {
+      do {
+        gitAgain = false;
+        const root = get().project?.root;
+        if (!root) return;
+        const status = await api.gitStatus(root).catch(() => null);
+        if (get().project?.root !== root) return;
+        const previous = get().git;
+        if (JSON.stringify(previous) !== JSON.stringify(status)) set({ git: status });
+        setGitContext(root, status);
+        set((s) => ({ fsTick: s.fsTick + 1 }));
+      } while (gitAgain);
+    };
+    gitFlight = run().finally(() => {
+      gitFlight = null;
+    });
+    return gitFlight;
+  },
+
+  scheduleGit() {
+    window.clearTimeout(gitTimer);
+    gitTimer = window.setTimeout(() => void get().refreshGit(), 350);
+  },
+
+  async gitRun(op) {
+    const root = get().project?.root;
+    if (!root || get().gitBusy) return undefined;
+    set({ gitBusy: true });
+    try {
+      return await op(root);
+    } catch (e) {
+      get().toast("error", errorMessage(e));
+      return undefined;
+    } finally {
+      set({ gitBusy: false });
+      lastSync = 0;
+      await get().syncDisk();
+      await get().refreshGit();
+    }
+  },
+
+  setCompare(path) {
+    set({ compare: path });
+  },
+
+  async openBeside(rawPath) {
+    const wanted = rawPath ?? get().active;
+    if (!wanted) return;
+    const path = normalize(wanted);
+    if (!isImagePath(path) && !getDoc(path)) {
+      try {
+        createDoc(path, await api.readTextFile(path));
+      } catch (e) {
+        get().toast("error", t("toast.fileError", { name: basename(path), error: errorMessage(e) }));
+        return;
+      }
+    }
+    const { tabs, active } = get();
+    set({ tabs: tabs.some((p) => samePath(p, path)) ? tabs : [...tabs, path], active: active ?? path, side: path });
+    touchGitMarks(path, 0);
+  },
+
+  closeBeside() {
+    set({ side: null, sideFocus: false });
+  },
+
+  setSideFocus(on) {
+    if (get().sideFocus !== on) set({ sideFocus: on });
   },
 
   async build(action) {
@@ -521,7 +684,7 @@ export const useStore = create<Store>((set, get) => ({
       get().toast("info", t("trust.buildBlocked"));
       return;
     }
-    await get().saveAll();
+    if (!(await get().saveAll())) return;
     const prefs = get().settings;
     set({ diagnostics: [], ...(prefs?.autoShowDebug !== false ? { debugArea: true, debugTab: "console" as const } : {}) });
     if (prefs?.clearConsoleOnBuild) set({ log: [] });
@@ -635,20 +798,27 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   pathRenamed(from, to) {
-    const { tabs, active } = get();
-    const doc = getDoc(from);
-    if (doc) {
-      const content = doc.model.getValue();
-      disposeDoc(from);
-      createDoc(to, content);
+    const { tabs, active, compare, expanded, side } = get();
+    const prefix = `${from.toLowerCase()}\\`;
+    const remap = (p: string) => (samePath(p, from) ? to : p.toLowerCase().startsWith(prefix) ? to + p.slice(from.length) : p);
+    for (const doc of allDocs()) {
+      const next = remap(doc.path);
+      if (next !== doc.path) moveDoc(doc.path, next);
     }
+    const open: Record<string, boolean> = {};
+    for (const [path, value] of Object.entries(expanded)) open[k(remap(path))] = value;
     set({
-      tabs: tabs.map((p) => (samePath(p, from) ? to : p)),
-      active: active && samePath(active, from) ? to : active,
+      tabs: tabs.map(remap),
+      active: active ? remap(active) : active,
+      compare: compare ? remap(compare) : compare,
+      side: side ? remap(side) : side,
+      expanded: open,
       selected: to,
     });
     void get().loadDir(dirname(from));
     void get().loadDir(dirname(to));
+    if (open[k(to)]) void get().loadDir(to);
+    get().scheduleGit();
   },
 
   addTerminal(shell) {
@@ -697,8 +867,10 @@ export const useStore = create<Store>((set, get) => ({
     const gone = tabs.filter((p) => p.toLowerCase() === lower || p.toLowerCase().startsWith(lower + "\\"));
     gone.forEach(disposeDoc);
     const nextTabs = tabs.filter((p) => !gone.includes(p));
-    set({ tabs: nextTabs, active: active && gone.includes(active) ? (nextTabs[0] ?? null) : active, selected: null });
+    const side = get().side;
+    set({ tabs: nextTabs, active: active && gone.includes(active) ? (nextTabs[0] ?? null) : active, selected: null, side: side && gone.includes(side) ? null : side });
     void get().loadDir(dirname(path));
+    get().scheduleGit();
   },
 
   async startDeviceLog(udid) {
@@ -815,7 +987,7 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   async installUpdate() {
-    await get().saveAll();
+    if (!(await get().saveAll())) return;
     set({ updateState: "downloading", updateProgress: 0, updateError: null });
     try {
       await installUpdate((p) => set({ updateProgress: p }));

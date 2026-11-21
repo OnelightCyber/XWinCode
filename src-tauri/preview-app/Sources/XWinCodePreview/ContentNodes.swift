@@ -48,7 +48,7 @@ struct LabelNode: View {
     let depth: Int
 
     var body: some View {
-        Label {
+        let label = Label {
             if node.label.isEmpty {
                 RichText.make(node.string("title") ?? "")
             } else {
@@ -61,6 +61,16 @@ struct LabelNode: View {
                 Image(systemName: symbol)
             }
         }
+        switch node.string("labelStyle") {
+        case "iconOnly":
+            label.labelStyle(.iconOnly)
+        case "titleOnly":
+            label.labelStyle(.titleOnly)
+        case "titleAndIcon":
+            label.labelStyle(.titleAndIcon)
+        default:
+            label
+        }
     }
 }
 
@@ -70,31 +80,15 @@ struct ShapeNode: View {
     var body: some View {
         switch node.type {
         case "RoundedRectangle":
-            painted(RoundedRectangle(cornerRadius: node.length("radius") ?? 0))
+            Paint.view(node, RoundedRectangle(cornerRadius: node.length("radius") ?? 0))
         case "Circle":
-            painted(Circle())
+            Paint.view(node, Circle())
         case "Capsule":
-            painted(Capsule())
+            Paint.view(node, Capsule())
         case "Ellipse":
-            painted(Ellipse())
+            Paint.view(node, Ellipse())
         default:
-            painted(Rectangle())
-        }
-    }
-
-    @ViewBuilder
-    private func painted<S: Shape>(_ shape: S) -> some View {
-        let fill = node.mod("fill").flatMap { Palette.style($0.fields["color"]) }
-        if let stroke = node.mod("stroke") {
-            let style = Palette.style(stroke.fields["color"]) ?? AnyShapeStyle(.foreground)
-            let width = max(stroke.value("width", default: 1), 0)
-            if let fill {
-                shape.fill(fill).stroke(style, lineWidth: width)
-            } else {
-                shape.stroke(style, lineWidth: width)
-            }
-        } else {
-            shape.fill(fill ?? AnyShapeStyle(.foreground))
+            Paint.view(node, Rectangle())
         }
     }
 }

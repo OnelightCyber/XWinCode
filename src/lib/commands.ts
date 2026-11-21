@@ -42,7 +42,7 @@ export const commands: Record<string, Command> = {
   newFile: cmd("newFile", "cmd.newFile", "group.file", () => window.dispatchEvent(new Event("xwc:new-file")), { shortcut: "Ctrl+N", needsProject: true }),
   openProject: cmd("openProject", "cmd.openProject", "group.file", () => void openProjectDialog(), { shortcut: "Ctrl+O" }),
   closeProject: cmd("closeProject", "cmd.closeProject", "group.file", () => void st().closeProject(), { needsProject: true }),
-  save: cmd("save", "cmd.save", "group.file", () => void st().save(undefined, { format: true }), { shortcut: "Ctrl+S", needsProject: true }),
+  save: cmd("save", "cmd.save", "group.file", () => void st().save(st().sideFocus && st().side ? st().side! : undefined, { format: true }), { shortcut: "Ctrl+S", needsProject: true }),
   saveAll: cmd("saveAll", "cmd.saveAll", "group.file", () => void st().saveAll(), { shortcut: "Ctrl+Alt+S", needsProject: true }),
   closeTab: cmd("closeTab", "cmd.closeTab", "group.file", () => st().active && void st().closeTab(st().active!), { shortcut: "Ctrl+W", needsProject: true }),
   quickOpen: cmd("quickOpen", "cmd.quickOpen", "group.file", () => st().openSheet("quickOpen"), { shortcut: "Ctrl+P", needsProject: true }),
@@ -78,6 +78,7 @@ export const commands: Record<string, Command> = {
   toggleInspector: cmd("toggleInspector", "cmd.toggleInspector", "group.view", () => st().toggle("inspector"), { shortcut: "Ctrl+Alt+0" }),
   library: cmd("library", "cmd.library", "group.view", () => st().openSheet("library"), { shortcut: "Ctrl+Shift+L", needsProject: true }),
   canvas: cmd("canvas", "cmd.canvas", "group.view", () => st().toggleCanvas(), { shortcut: "Ctrl+Alt+Enter", needsProject: true }),
+  splitEditor: cmd("splitEditor", "cmd.splitEditor", "group.view", () => (st().side ? st().closeBeside() : void st().openBeside()), { shortcut: "Ctrl+\\", needsProject: true }),
 
   navProject: cmd("navProject", "cmd.navProject", "group.navigate", () => st().setNavTab("project"), { shortcut: "Ctrl+1" }),
   findInProject: cmd(
@@ -90,6 +91,7 @@ export const commands: Record<string, Command> = {
     },
     { shortcut: "Ctrl+Shift+F", needsProject: true },
   ),
+  navGit: cmd("navGit", "cmd.navGit", "group.navigate", () => st().setNavTab("git"), { shortcut: "Ctrl+2", needsProject: true }),
   navIssues: cmd("navIssues", "cmd.navIssues", "group.navigate", () => st().setNavTab("issues"), { shortcut: "Ctrl+5" }),
   nextTab: cmd("nextTab", "cmd.nextTab", "group.navigate", () => cycleTab(1), { shortcut: "Ctrl+Tab" }),
   prevTab: cmd("prevTab", "cmd.prevTab", "group.navigate", () => cycleTab(-1), { shortcut: "Ctrl+Shift+Tab" }),
@@ -128,9 +130,10 @@ function match(e: KeyboardEvent): string | null {
     if (digit === "0") return e.altKey ? "toggleInspector" : "toggleNavigator";
     if (digit === "1" && !e.shiftKey) return "navProject";
     if (digit === "5" && !e.shiftKey) return "navIssues";
-    if (digit === "2" && e.shiftKey) return "devices";
+    if (digit === "2") return e.shiftKey ? "devices" : "navGit";
     return null;
   }
+  if (e.code === "Backslash" && !e.shiftKey && !e.altKey) return "splitEditor";
   if (key === "." || e.code === "Period") return "stop";
   if (key === ",") return "settings";
   if (e.altKey && key === "s") return "saveAll";

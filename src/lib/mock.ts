@@ -104,6 +104,7 @@ struct AnimDemo: View {
     AnimDemo()
 }
 `,
+  [`${ROOT}\\Resources\\Logo.svg`]: `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160" viewBox="0 0 240 160"><rect width="240" height="160" rx="24" fill="#0a84ff"/><circle cx="120" cy="80" r="42" fill="#ffffff"/></svg>`,
   [`${ROOT}\\Sources\\HelloApp\\Assets.xcassets\\Brand.colorset\\Contents.json`]: `{
   "colors" : [
     { "color" : { "color-space" : "srgb", "components" : { "alpha" : "1.000", "blue" : "0.945", "green" : "0.353", "red" : "0.369" } }, "idiom" : "universal" },
@@ -225,6 +226,58 @@ function children(dir: string): Entry[] {
 
 type Handler = (payload: unknown) => void;
 const listeners = new Map<string, Set<Handler>>();
+
+let projectConfig: Record<string, unknown> = {
+  bundleId: "com.example.HelloApp",
+  displayName: "Hello",
+  version: "1.0",
+  build: "1",
+  permissions: { NSCameraUsageDescription: "Used by Hello." },
+  icon: null,
+  minIos: "17.0",
+  devices: null,
+  orientations: null,
+  appearance: null,
+  backgroundModes: [],
+  capabilities: ["healthkit"],
+  appGroups: [],
+  associatedDomains: [],
+};
+
+const repo = {
+  exists: true,
+  head: "4f2a9c1e",
+  branch: "main",
+  branches: ["main", "feature/widgets"],
+  ahead: 1,
+  staged: new Set<string>(),
+  committed: { ...files } as Record<string, string>,
+  log: [
+    { hash: "4f2a9c1e77aa", short: "4f2a9c1", subject: "Add the tasks screen", author: "Dev", time: Math.floor(Date.now() / 1000) - 5400 },
+    { hash: "9b0d3e2a11bb", short: "9b0d3e2", subject: "First commit", author: "Dev", time: Math.floor(Date.now() / 1000) - 86400 * 3 },
+  ],
+};
+
+function mockPattern(query: string, options: { caseSensitive?: boolean; wholeWord?: boolean; regex?: boolean } | undefined, flags: string): RegExp {
+  const core = options?.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  try {
+    return new RegExp(options?.wholeWord ? `\\b(?:${core})\\b` : core, flags + (options?.caseSensitive ? "" : "i"));
+  } catch (e) {
+    throw `This regular expression is not valid: ${e instanceof Error ? e.message : e}`;
+  }
+}
+
+function repoFiles() {
+  const out: { path: string; status: string; staged: boolean; unstaged: boolean; origin: string | null }[] = [];
+  for (const path of new Set([...Object.keys(files), ...Object.keys(repo.committed)])) {
+    const now = files[path];
+    const then = repo.committed[path];
+    if (now === then) continue;
+    const staged = repo.staged.has(path);
+    out.push({ path, status: then === undefined ? (staged ? "added" : "untracked") : now === undefined ? "deleted" : "modified", staged, unstaged: !staged, origin: null });
+  }
+  return out;
+}
 
 export function mockOn(event: string, handler: Handler): () => void {
   const set = listeners.get(event) ?? new Set();
@@ -362,23 +415,133 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
       files[a.path] = "";
       return r(undefined);
     case "path_exists":
-      return r(a.path in files);
+      return r(a.path in files || Object.keys(files).some((f) => f.startsWith(a.path + "\\")));
+    case "create_dir":
+      files[`${a.path}\\.keep`] = "";
+      return r(undefined);
+    case "rename_path":
+    case "move_path": {
+      const from = String(a.from);
+      const to = cmd === "move_path" ? `${a.dir}\\${from.slice(from.lastIndexOf("\\") + 1)}` : String(a.to);
+      if (to !== from && (to in files || Object.keys(files).some((f) => f.startsWith(to + "\\")))) throw "A file or folder with this name already exists.";
+      if (cmd === "move_path" && (to + "\\").startsWith(from + "\\")) throw "A folder can't be moved or copied into itself.";
+      for (const f of Object.keys(files)) {
+        if (f !== from && !f.startsWith(from + "\\")) continue;
+        files[to + f.slice(from.length)] = files[f];
+        delete files[f];
+      }
+      return r(cmd === "move_path" ? to : undefined);
+    }
+    case "delete_path":
+      for (const f of Object.keys(files)) if (f === a.path || f.startsWith(a.path + "\\")) delete files[f];
+      return r(undefined);
+    case "duplicate_path": {
+      const from = String(a.path);
+      const slash = from.lastIndexOf("\\");
+      const name = from.slice(slash + 1);
+      const isFile = from in files;
+      const dot = isFile ? name.lastIndexOf(".") : -1;
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : "";
+      let n = 2;
+      let to = "";
+      do to = `${from.slice(0, slash)}\\${stem} ${n++}${ext}`;
+      while (to in files || Object.keys(files).some((f) => f.startsWith(to + "\\")));
+      for (const f of Object.keys(files)) if (f === from || f.startsWith(from + "\\")) files[to + f.slice(from.length)] = files[f];
+      return r(to);
+    }
+    case "import_paths": {
+      const made: string[] = [];
+      for (const source of a.sources as string[]) {
+        const to = `${a.dir}\\${source.slice(source.lastIndexOf("\\") + 1)}`;
+        files[to] = "";
+        made.push(to);
+      }
+      return r(made);
+    }
+    case "read_image_data_url":
+      if (!(a.path in files)) throw "File not found";
+      return r(`data:image/svg+xml;utf8,${encodeURIComponent(files[a.path])}`);
+    case "git_status":
+      return r({ available: true, locked: false, repo: repo.exists, head: repo.exists ? repo.head : null, branch: repo.exists ? repo.branch : null, upstream: repo.exists ? `origin/${repo.branch}` : null, ahead: repo.ahead, behind: 0, files: repo.exists ? repoFiles() : [] });
+    case "git_original":
+      return r(repo.committed[a.path] ?? null);
+    case "git_stage":
+      for (const p of a.paths as string[]) a.stage ? repo.staged.add(p) : repo.staged.delete(p);
+      return r(undefined);
+    case "git_discard":
+      for (const p of a.paths as string[]) {
+        if (repo.committed[p] === undefined) delete files[p];
+        else files[p] = repo.committed[p];
+        repo.staged.delete(p);
+      }
+      return r(undefined);
+    case "git_commit": {
+      if (!String(a.message).trim()) throw "Write a commit message first.";
+      for (const f of repoFiles()) {
+        if (!a.everything && !f.staged) continue;
+        if (files[f.path] === undefined) delete repo.committed[f.path];
+        else repo.committed[f.path] = files[f.path];
+      }
+      repo.staged.clear();
+      repo.head = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+      repo.ahead++;
+      repo.log.unshift({ hash: repo.head + "0000", short: repo.head.slice(0, 7), subject: String(a.message).split("\n")[0], author: "Dev", time: Math.floor(Date.now() / 1000) });
+      return r(repo.head.slice(0, 7));
+    }
+    case "git_init":
+      repo.exists = true;
+      return r(undefined);
+    case "git_branches":
+      return r([...repo.branches.map((name) => ({ name, current: name === repo.branch, remote: false })), { name: "origin/main", current: false, remote: true }]);
+    case "git_switch":
+      if (a.create) repo.branches.push(a.name);
+      repo.branch = a.name;
+      return r(undefined);
+    case "git_sync":
+      await delay(500);
+      if (a.op === "push") repo.ahead = 0;
+      return r("ok");
+    case "git_log":
+      return r(repo.log.slice(0, a.limit));
     case "search_project": {
-      const q = String(a.query).toLowerCase();
+      const re = mockPattern(String(a.query), a.options, "");
       const hits: { path: string; line: number; column: number; text: string }[] = [];
       for (const [path, text] of Object.entries(files)) {
         text.split("\n").forEach((line, i) => {
-          const col = line.toLowerCase().indexOf(q);
-          if (q && col >= 0) hits.push({ path, line: i + 1, column: col + 1, text: line.trim() });
+          const found = a.query ? re.exec(line) : null;
+          if (found) hits.push({ path, line: i + 1, column: found.index + 1, text: line.trim() });
         });
       }
       return r(hits);
     }
     case "replace_in_file": {
+      const re = mockPattern(String(a.query), a.options, "g");
       const text = files[a.path] ?? "";
-      const parts = text.split(a.query);
-      files[a.path] = parts.join(a.replacement);
-      return r(parts.length - 1);
+      const count = [...text.matchAll(re)].length;
+      files[a.path] = a.options?.regex ? text.replace(re, String(a.replacement)) : text.replace(re, () => String(a.replacement));
+      return r(count);
+    }
+    case "list_sources":
+      return r(
+        Object.entries(files)
+          .filter(([path]) => path.endsWith(".swift"))
+          .map(([path, text]) => {
+            let sum = 0;
+            for (let n = 0; n < text.length; n++) sum = (sum * 31 + text.charCodeAt(n)) | 0;
+            return { path, stamp: `${sum}:${text.length}` };
+          }),
+      );
+    case "project_symbols": {
+      const out: { name: string; kind: string; path: string; line: number }[] = [];
+      for (const [path, text] of Object.entries(files)) {
+        if (!path.endsWith(".swift")) continue;
+        text.split("\n").forEach((line, i) => {
+          const found = /^\s*(?:\w+\s+)*?(struct|class|enum|protocol|actor|extension|func|typealias)\s+(\w+)/.exec(line);
+          if (found) out.push({ name: found[2], kind: found[1], path, line: i + 1 });
+        });
+      }
+      return r(out);
     }
     case "check_toolchain":
       await delay(600);
@@ -429,7 +592,10 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, unknown> =
         },
       ]);
     case "read_project_config":
-      return r({ bundleId: "com.example.HelloApp", displayName: "Hello", version: "1.0", build: "1", permissions: { NSCameraUsageDescription: "Used by Hello." }, icon: null });
+      return r(projectConfig);
+    case "write_project_config":
+      projectConfig = { ...a.config, icon: projectConfig.icon };
+      return r(undefined);
     case "start_build":
       void simulateBuild(a.request.action);
       return r(taskId);

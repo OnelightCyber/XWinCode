@@ -5,7 +5,15 @@ import { commands } from "../lib/commands";
 import { api } from "../lib/ipc";
 import { basename, dirname, relative } from "../lib/paths";
 import { useStore } from "../lib/store";
+import { KIND_BADGE, type SymbolKind } from "../lib/symbols";
+import type { ProjectSymbol } from "../lib/types";
 import { FileIcon } from "./FileIcon";
+
+type Result = { path: string; hits: number[]; symbol?: ProjectSymbol };
+
+function badgeKind(kind: string): SymbolKind {
+  return kind in KIND_BADGE ? (kind as SymbolKind) : "other";
+}
 
 function fuzzy(query: string, text: string): { score: number; hits: number[] } | null {
   const q = query.toLowerCase();
@@ -36,6 +44,7 @@ export function QuickOpen({ commandMode = false }: { commandMode?: boolean }) {
   const project = useStore((s) => s.project);
   const { openSheet, openFile } = useStore.getState();
   const [files, setFiles] = useState<string[]>([]);
+  const [symbols, setSymbols] = useState<ProjectSymbol[]>([]);
   const [query, setQuery] = useState(commandMode ? ">" : "");
   const isCommands = query.startsWith(">");
   const [index, setIndex] = useState(0);
@@ -43,8 +52,14 @@ export function QuickOpen({ commandMode = false }: { commandMode?: boolean }) {
   const close = () => openSheet(null);
 
   useEffect(() => {
-    if (project) void api.listFiles(project.root).then(setFiles);
-  }, [project]);
+    if (!project) return;
+    void api.listFiles(project.root).then(setFiles);
+    if (!commandMode)
+      void api
+        .projectSymbols(project.root)
+        .then(setSymbols)
+        .catch(() => setSymbols([]));
+  }, [project, commandMode]);
 
   const commandResults = useMemo(() => {
     if (!isCommands) return [];
@@ -57,16 +72,23 @@ export function QuickOpen({ commandMode = false }: { commandMode?: boolean }) {
       .map((r) => ({ c: r.c, hits: r.m!.hits }));
   }, [isCommands, query, project]);
 
-  const results = useMemo(() => {
+  const results = useMemo<Result[]>(() => {
     if (!project || isCommands) return [];
-    if (!query) return files.slice(0, 50).map((f) => ({ path: f, hits: [] as number[] }));
-    return files
+    if (!query) return files.slice(0, 50).map((f) => ({ path: f, hits: [] }));
+    const byFile = files
       .map((f) => ({ path: f, m: fuzzy(query, basename(f)) }))
       .filter((r) => r.m)
       .sort((a, b) => a.m!.score - b.m!.score)
-      .slice(0, 50)
+      .slice(0, 30)
       .map((r) => ({ path: r.path, hits: r.m!.hits }));
-  }, [files, query, project, isCommands]);
+    const bySymbol = symbols
+      .map((s) => ({ s, m: fuzzy(query, s.name) }))
+      .filter((r) => r.m)
+      .sort((a, b) => a.m!.score - b.m!.score)
+      .slice(0, 40)
+      .map((r) => ({ path: r.s.path, hits: r.m!.hits, symbol: r.s }));
+    return [...byFile, ...bySymbol];
+  }, [files, symbols, query, project, isCommands]);
 
   useEffect(() => setIndex(0), [query]);
   useEffect(() => {
@@ -82,10 +104,10 @@ export function QuickOpen({ commandMode = false }: { commandMode?: boolean }) {
       c.run();
       return;
     }
-    const path = results[i]?.path;
-    if (!path) return;
+    const picked = results[i];
+    if (!picked) return;
     close();
-    void openFile(path);
+    void openFile(picked.path, picked.symbol ? { line: picked.symbol.line } : undefined);
   };
 
   return (
@@ -123,13 +145,13 @@ export function QuickOpen({ commandMode = false }: { commandMode?: boolean }) {
             </div>
           ))}
           {results.map((r, i) => (
-            <div key={r.path} className={`quick-item${i === index ? " on" : ""}`} onMouseEnter={() => setIndex(i)} onClick={() => choose(i)}>
-              <FileIcon path={r.path} size={16} />
+            <div key={r.symbol ? `${r.path}:${r.symbol.line}:${r.symbol.name}` : r.path} className={`quick-item${i === index ? " on" : ""}`} onMouseEnter={() => setIndex(i)} onClick={() => choose(i)}>
+              {r.symbol ? <span className={`sym-badge k-${badgeKind(r.symbol.kind)}`}>{KIND_BADGE[badgeKind(r.symbol.kind)]}</span> : <FileIcon path={r.path} size={16} />}
               <span>
-                <Highlight text={basename(r.path)} hits={r.hits} />
+                <Highlight text={r.symbol ? r.symbol.name : basename(r.path)} hits={r.hits} />
               </span>
               <span className="muted ellipsis" style={{ fontSize: 11.5, marginLeft: "auto" }}>
-                {project && dirname(relative(project.root, r.path))}
+                {r.symbol ? `${basename(r.path)}:${r.symbol.line}` : project && dirname(relative(project.root, r.path))}
               </span>
             </div>
           ))}

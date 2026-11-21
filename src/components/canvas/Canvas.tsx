@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ALargeSmall, BatteryFull, Camera, ChevronsUpDown, Circle, LayoutGrid, Maximize, Moon, MousePointer2, RotateCcw, RotateCwSquare, Signal, Smartphone, Sun, Square, SunMoon, Wifi, X, Zap } from "lucide-react";
-import { t } from "../../i18n";
+import { t, tn } from "../../i18n";
 import { takeScreenshot } from "../../lib/capture";
 import { api, errorMessage, on } from "../../lib/ipc";
 import { revealInExplorer } from "../../lib/links";
@@ -25,21 +25,48 @@ import {
   type Screen,
 } from "../../lib/preview/devices";
 import { Runtime, type RenderResult } from "../../lib/preview/runtime";
-import type { AnimCurve, PreviewEvent, SrcRange, ViewNode } from "../../lib/preview/types";
+import { mapModViews, modViews, type AnimCurve, type Issue, type PreviewEvent, type SrcRange, type ViewNode } from "../../lib/preview/types";
+import { basename } from "../../lib/paths";
 import { useStore } from "../../lib/store";
 import { Select } from "../Controls";
 import { useMenu, type MenuEntry } from "../Menu";
 import { selectView, useViewSelection } from "../../lib/preview/selection";
-import { curveCss, Node, type RenderEnv } from "./PreviewRender";
+import { curveCss, expands, Node, type RenderEnv } from "./PreviewRender";
 import { PreviewBoundary } from "./PreviewBoundary";
 import "@fontsource-variable/inter";
 import "./canvas.css";
 
-let shared: { root: string; rt: Runtime; disk: Map<string, string> } | null = null;
+let shared: { root: string; rt: Runtime; disk: Map<string, string>; stamps: Map<string, string> } | null = null;
 
 function runtimeFor(root: string) {
-  if (!shared || shared.root !== root) shared = { root, rt: new Runtime(), disk: new Map() };
+  if (!shared || shared.root !== root) shared = { root, rt: new Runtime(), disk: new Map(), stamps: new Map() };
   return shared;
+}
+
+async function reconcileSources(root: string): Promise<boolean> {
+  const { disk, stamps } = runtimeFor(root);
+  const list = await api.listSources(root).catch(() => null);
+  if (!list || shared?.root !== root) return false;
+  const seen = new Set<string>();
+  let changed = false;
+  await Promise.all(
+    list.slice(0, 400).map(async (source) => {
+      seen.add(source.path);
+      if (stamps.get(source.path) === source.stamp && disk.has(source.path)) return;
+      const text = await api.readTextFile(source.path).catch(() => null);
+      if (text === null) return;
+      if (disk.get(source.path) !== text) changed = true;
+      disk.set(source.path, text);
+      stamps.set(source.path, source.stamp);
+    }),
+  );
+  for (const path of [...disk.keys()]) {
+    if (seen.has(path)) continue;
+    disk.delete(path);
+    stamps.delete(path);
+    changed = true;
+  }
+  return changed;
 }
 
 function usePersisted<T>(key: string, initial: T): [T, (v: T) => void] {
@@ -288,10 +315,7 @@ function indexNodes(tree: ViewNode | null): Map<string, ViewNode> {
     map.set(n.id, n);
     n.children?.forEach(walk);
     n.label?.forEach(walk);
-    for (const m of n.mods ?? []) {
-      if ((m.m === "background" && m.view) || m.m === "overlay") m.view?.forEach(walk);
-      else if (m.m === "tabItem") m.label.forEach(walk);
-    }
+    for (const m of n.mods ?? []) for (const [, list] of modViews(m)) list.forEach(walk);
   };
   if (tree) walk(tree);
   return map;
@@ -322,9 +346,7 @@ function withAssets(tree: ViewNode | null, assets: Assets): ViewNode | null {
       budget -= url.length;
       props = { ...props, src: url, scale: asset.png ? 3 : asset.scale };
     }
-    const mods = n.mods?.map((m) =>
-      m.m === "background" && m.view ? { ...m, view: m.view.map(walk) } : m.m === "overlay" ? { ...m, view: m.view.map(walk) } : m.m === "tabItem" ? { ...m, label: m.label.map(walk) } : m,
-    );
+    const mods = n.mods?.map((m) => mapModViews(m, walk));
     return { ...n, props, children: n.children?.map(walk), label: n.label?.map(walk), mods, src: undefined };
   };
   return walk(tree);
@@ -379,6 +401,7 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
   const [ready, setReady] = useState(false);
   const [assets, setAssets] = useState<Assets>({});
   const [accent, setAccentColor] = useState<{ light: Rgba; dark?: Rgba } | null>(null);
+  const [appScheme, setAppScheme] = useState<"light" | "dark" | null>(null);
   const fonts = useRef<FontAsset[]>([]);
   const [motion, setMotion] = useState<{ curve: AnimCurve; entering: Set<string>; nonce: number } | null>(null);
   const prevIds = useRef<Set<string>>(new Set());
@@ -406,22 +429,14 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
   const liveCtx = useRef({ live: "off" as LiveState, assets: {} as Assets, schemePref: "auto" as "auto" | "light" | "dark", dark: false, title: "" });
   const { rt, disk } = runtimeFor(project.root);
   const appDark = document.documentElement.dataset.theme !== "light";
-  const dark = schemePref === "auto" ? appDark : schemePref === "dark";
+  const dark = schemePref === "auto" ? (appScheme ? appScheme === "dark" : appDark) : schemePref === "dark";
   const device = deviceById(deviceId);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const files = await api.listFiles(project.root).catch(() => [] as string[]);
-      const swift = files.filter((f) => f.toLowerCase().endsWith(".swift") && !/[\\/](\.build|xtool)[\\/]/.test(f)).slice(0, 400);
-      await Promise.all(
-        swift.map(async (rel) => {
-          const full = /^[A-Za-z]:\\/.test(rel) ? rel : `${project.root}\\${rel.replace(/\//g, "\\")}`;
-          if (disk.has(full)) return;
-          const text = await api.readTextFile(full).catch(() => null);
-          if (text !== null) disk.set(full, text);
-        }),
-      );
+      await reconcileSources(project.root);
       const scaleOf = (f: string) => Number(/@([23])x\.[a-z]+$/i.exec(f)?.[1] ?? 1);
       const rank = (f: string) => [2, 3, 1].indexOf(scaleOf(f));
       const full = (rel: string) => (/^[A-Za-z]:\\/.test(rel) ? rel : `${project.root}\\${rel.replace(/\//g, "\\")}`);
@@ -441,6 +456,18 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
       const accentAsset = colors.AccentColor ?? null;
       setAccent(accentAsset ? cssColor({ rgba: accentAsset.light }, false) ?? null : null, accentAsset ? cssColor({ rgba: accentAsset.dark ?? accentAsset.light }, false) : null);
       if (!cancelled) setAccentColor(accentAsset);
+      const manifest = await api.readTextFile(full("xtool.yml")).catch(() => null);
+      const infoPath = (manifest ? /^infoPath:[ \t]*["']?([^"'\r\n#]+)/m.exec(manifest)?.[1].trim() : "") || "Info.plist";
+      const plist = await api.readTextFile(full(infoPath)).catch(() => null);
+      let forced = plist ? (/<key>UIUserInterfaceStyle<\/key>\s*<string>(Dark|Light)<\/string>/i.exec(plist)?.[1].toLowerCase() ?? null) : null;
+      if (!forced) {
+        for (const text of disk.values()) {
+          if (!/@main\b/.test(text)) continue;
+          forced = /\.preferredColorScheme\(\s*\.(dark|light)\s*\)/.exec(text)?.[1] ?? null;
+          break;
+        }
+      }
+      if (!cancelled) setAppScheme(forced === "dark" || forced === "light" ? forced : null);
       const fontFiles = files.filter((f) => /\.(ttf|otf)$/i.test(f) && !/[\\/](\.build|xtool)[\\/]/.test(f)).slice(0, 24);
       const loaded: FontAsset[] = [];
       await Promise.all(
@@ -531,7 +558,7 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
       const r = { ...fresh, tree: share(lastGood.current, fresh.tree) };
       if (r.tree) lastGood.current = r.tree;
       prevIds.current = treeIds(r.tree);
-      setResult((old) => (old && old.tree === r.tree && JSON.stringify(old.errors) === JSON.stringify(r.errors) && old.notes.join() === r.notes.join() ? old : r));
+      setResult((old) => (old && old.tree === r.tree && JSON.stringify(old.errors) === JSON.stringify(r.errors) && old.notes.join() === r.notes.join() && JSON.stringify(old.issues) === JSON.stringify(r.issues) ? old : r));
       setVariantResults((old) => (old.length === extra.length && old.every((v, i) => v.tree === extra[i].tree && v.key === extra[i].key) ? old : extra));
       return r;
     },
@@ -539,9 +566,22 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
   );
 
   const renderTimer = useRef(0);
+  const renderDue = useRef(0);
+  const settle = useRef(false);
+  const settleTimer = useRef(0);
+  const motionUntil = useRef(0);
   const runRender = useRef<() => void>(() => undefined);
   runRender.current = () => {
     if (!ready) return;
+    if (settle.current) {
+      settle.current = false;
+      const el = stage.current;
+      if (el) {
+        el.classList.add("pv-settle");
+        window.clearTimeout(settleTimer.current);
+        settleTimer.current = window.setTimeout(() => el.classList.remove("pv-settle"), 90);
+      }
+    }
     try {
       rt.setFiles(sources());
       const targets = rt.targets(path);
@@ -556,19 +596,44 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
       }
       renderAll(key);
     } catch (e) {
-      setResult({ tree: null, errors: [{ message: e instanceof Error ? e.message : String(e), line: 0, column: 0 }], notes: [], stats: { views: 0, depth: 0, heavy: 0 } });
+      setResult({ tree: null, errors: [{ message: e instanceof Error ? e.message : String(e), line: 0, column: 0 }], notes: [], issues: [], stats: { views: 0, depth: 0, heavy: 0 } });
       setVariantResults([]);
     }
   };
   const scheduleRender = useCallback((delay = 120) => {
+    const due = performance.now() + delay;
+    if (renderDue.current && renderDue.current <= due) return;
     window.clearTimeout(renderTimer.current);
-    renderTimer.current = window.setTimeout(() => runRender.current(), delay);
+    renderDue.current = due;
+    renderTimer.current = window.setTimeout(() => {
+      renderDue.current = 0;
+      runRender.current();
+    }, delay);
   }, []);
-  useEffect(() => () => window.clearTimeout(renderTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(renderTimer.current);
+      window.clearTimeout(settleTimer.current);
+      renderDue.current = 0;
+    },
+    [],
+  );
 
   useEffect(() => {
     scheduleRender(0);
   }, [ready, path, target, dark, device, landscape, typeSize, tabCount, rt, sources, variantMode, renderAll, scheduleRender]);
+
+  const fsTick = useStore((s) => s.fsTick);
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    void reconcileSources(project.root).then((changed) => {
+      if (changed && !cancelled) scheduleRender(0);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fsTick, ready, project.root, scheduleRender]);
 
   useEffect(() => {
     const doc = getDoc(path);
@@ -621,8 +686,12 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
   );
 
   useEffect(() => {
-    if (!motion) return;
+    if (!motion) {
+      motionUntil.current = 0;
+      return;
+    }
     const { duration } = curveCss(motion.curve);
+    motionUntil.current = performance.now() + duration * 1000 + 120;
     const timer = window.setTimeout(() => setMotion(null), duration * 1000 + 120);
     return () => window.clearTimeout(timer);
   }, [motion]);
@@ -965,10 +1034,42 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
   };
   const perf = result ? estimatePerf(device, result.stats) : null;
   const simulated = (result?.notes ?? []).filter((n) => n.startsWith("~")).map((n) => n.slice(1));
-  const unsupported = (result?.notes ?? []).filter((n) => !n.startsWith("~") && !n.startsWith("?"));
   const error = result?.errors[0];
+  const issueMenu = useMenu();
+  const failures = (result?.issues ?? []).filter((i) => i.kind !== "unsupported");
+  const gaps = (result?.issues ?? []).filter((i) => i.kind === "unsupported" && !i.message.startsWith("~"));
+  const openIssues = (e: React.MouseEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const entry = (i: Issue): MenuEntry => {
+      const file = i.file;
+      const located = file !== undefined && i.line > 0;
+      return {
+        type: "item",
+        label: issueText(i),
+        detail: located ? `${basename(file)}:${i.line}` : undefined,
+        disabled: !located,
+        danger: i.kind === "error",
+        onSelect: () => {
+          if (located) void useStore.getState().openFile(file, { line: i.line, column: i.column });
+        },
+      };
+    };
+    const entries: MenuEntry[] = [];
+    if (failures.length) entries.push({ type: "title", label: t("canvas.issues.errors") }, ...failures.slice(0, 20).map(entry));
+    if (failures.length && gaps.length) entries.push({ type: "separator" });
+    if (gaps.length) entries.push({ type: "title", label: t("canvas.issues.gaps") }, ...gaps.slice(0, 30).map(entry));
+    issueMenu.toggle({ x: r.left, y: r.top - 6, minWidth: 320, entries });
+  };
 
   const entering = motion?.entering;
+  const measure = useCallback(
+    (key: string, width: number, height: number) => {
+      if (!rt.setMeasured(key, width, height)) return;
+      settle.current = true;
+      scheduleRender(Math.max(30, motionUntil.current - performance.now()));
+    },
+    [rt, scheduleRender],
+  );
   const env = useMemo<RenderEnv>(
     () => ({
       dark: effectiveDark,
@@ -983,8 +1084,9 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
       assets,
       dispatch,
       entering,
+      measure,
     }),
-    [effectiveDark, accent, assets, dispatch, entering],
+    [effectiveDark, accent, assets, dispatch, entering, measure],
   );
   const variantEnvs = useMemo(
     () =>
@@ -994,7 +1096,7 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
       }),
     [env, variantResults],
   );
-  const preview = useMemo(() => (tree ? <Node node={tree} env={env} axis="y" /> : null), [tree, env]);
+  const preview = useMemo(() => (tree ? <Node node={tree} env={env} axis="y" edge={expands(tree).y ? 3 : 0} /> : null), [tree, env]);
 
   return (
     <div className="canvas">
@@ -1130,7 +1232,7 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
                   </div>
                   <div style={{ position: "relative", width: variantFrames[vi].frame.width, height: variantFrames[vi].frame.height }}>
                     <DeviceFrame device={v.device} screen={variantFrames[vi].screen} typeSize={v.typeSize} motion={motion?.curve} dark={rootScheme(v.tree) ? rootScheme(v.tree) === "dark" : v.dark} background={screenBackground(v.tree)}>
-                      {v.tree && <Node node={v.tree} env={variantEnvs[vi]} axis="y" />}
+                      {v.tree && <Node node={v.tree} env={variantEnvs[vi]} axis="y" edge={expands(v.tree).y ? 3 : 0} />}
                     </DeviceFrame>
                     {selectMode && v.tree && <SelectLayer zoom={variantZoom} nodes={indexNodes(v.tree)} path={path} picked={picked} onPick={pickNode} tree={v.tree} />}
                   </div>
@@ -1151,21 +1253,35 @@ export default function Canvas({ path, onClose }: { path: string; onClose: () =>
         </PreviewBoundary>
       </div>
       <div className="canvas-foot">
-        {error && error.line > 0 && (
+        {error && (
           <span className="canvas-err" title={error.message}>
-            {t("canvas.syntax", { line: error.line, message: error.message })}
+            {error.line > 0 ? t("canvas.syntax", { line: error.line, message: error.message }) : `${t("canvas.error")} ${error.message}`}
           </span>
         )}
+        {failures.length + gaps.length > 0 && (
+          <button className={`canvas-issues${failures.length ? " bad" : ""}`} onClick={openIssues}>
+            {tn("canvas.issues", failures.length + gaps.length)}
+          </button>
+        )}
+        {issueMenu.node}
         {perf && (
           <span className={`canvas-perf ${perf.level}`} title={t("canvas.perfHint")}>
             {device.chip} · {device.ram} GB · {device.hz} Hz · {t(`canvas.perf.${perf.level}`)} · {t("canvas.frameTime", { ms: perf.frameMs.toFixed(1), budget: perf.budgetMs })}
           </span>
         )}
         {simulated.length > 0 && <span className="canvas-note" title={simulated.join(", ")}>{t("canvas.simulated", { list: simulated.slice(0, 3).join(", ") })}</span>}
-        {unsupported.length > 0 && <span className="canvas-note" title={unsupported.join(", ")}>{t("canvas.unsupported", { list: unsupported.slice(0, 3).join(", ") })}</span>}
       </div>
     </div>
   );
+}
+
+function issueText(i: Issue): string {
+  const m = i.message;
+  if (i.kind === "skipped") return t("canvas.issue.skipped", { name: m });
+  if (i.kind === "error") return m;
+  if (m.startsWith(".")) return t("canvas.issue.modifier", { name: m });
+  if (m.startsWith("?")) return t("canvas.issue.member", { name: m.slice(1) });
+  return t("canvas.issue.placeholder", { name: m });
 }
 
 function specsFor(mode: VariantMode, key: string | null, targets: { key: string; label: string }[], device: DeviceSpec, dark: boolean, landscape: boolean, typeSize: string): VariantSpec[] {
@@ -1354,6 +1470,7 @@ function DeviceFrame({ device, screen, typeSize, dark, background, motion, child
             borderRadius: device.radius,
             background: cssColor({ name: background }, dark),
             color: fg,
+            "--pv-corner": `${device.radius}px`,
             "--pv-safe-top": `${screen.top}px`,
             "--pv-safe-bottom": `${screen.bottom}px`,
             "--pv-safe-left": `${screen.left}px`,

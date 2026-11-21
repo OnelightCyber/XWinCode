@@ -1,4 +1,16 @@
-export type ColorSpec = { name: string; opacity?: number } | { rgba: [number, number, number, number]; dark?: [number, number, number, number] };
+export interface GradientSpec {
+  kind: "linear" | "radial" | "angular";
+  stops: { color: ColorSpec; at?: number }[];
+  from?: [number, number];
+  to?: [number, number];
+  center?: [number, number];
+  r0?: number;
+  r1?: number;
+  a0?: number;
+  a1?: number;
+}
+
+export type ColorSpec = ({ name: string; opacity?: number } | { rgba: [number, number, number, number]; dark?: [number, number, number, number] }) & { gradient?: GradientSpec };
 
 export interface AnimCurve {
   kind: string;
@@ -81,7 +93,7 @@ export type Mod =
   | { m: "ignoresSafeArea" }
   | { m: "scheme"; value: "light" | "dark" }
   | { m: "fill"; color: ColorSpec }
-  | { m: "stroke"; color: ColorSpec; width: number }
+  | { m: "stroke"; color: ColorSpec; width: number; cap?: string; dash?: number[]; inset?: boolean }
   | { m: "trim"; from: number; to: number }
   | { m: "resizable" }
   | { m: "aspect"; mode: "fit" | "fill"; ratio?: number }
@@ -95,7 +107,64 @@ export type Mod =
   | { m: "textFieldStyle"; value: string }
   | { m: "onTap"; event: string }
   | { m: "animation"; curve: AnimCurve; value?: string }
-  | { m: "transition"; kind: string; edge?: string };
+  | { m: "transition"; kind: string; edge?: string }
+  | { m: "toolbar"; items: { placement: string; view: ViewNode[] }[] }
+  | { m: "inset"; edge: "top" | "bottom" | "leading" | "trailing"; view: ViewNode[] }
+  | { m: "accessory"; view: ViewNode[] }
+  | { m: "mask"; view: ViewNode[] }
+  | { m: "glass"; shape?: ShapeSpec; tint?: ColorSpec; clear?: boolean; interactive?: boolean }
+  | { m: "effect"; kind: "blur" | "brightness" | "contrast" | "saturation" | "grayscale" | "hueRotation" | "colorInvert"; value: number }
+  | { m: "position"; x: number; y: number }
+  | { m: "gridSpan"; value: number }
+  | { m: "lineStyle"; width: number; dash?: number[] }
+  | { m: "badge"; text: string }
+  | { m: "search"; prompt: string }
+  | { m: "scrollBg"; hidden: boolean }
+  | { m: "rowBg"; color?: ColorSpec; view?: ViewNode[] }
+  | { m: "rowSep"; hidden: boolean }
+  | { m: "rowInsets"; top: number; leading: number; bottom: number; trailing: number };
+
+export function modViews(m: Mod): [string, ViewNode[]][] {
+  switch (m.m) {
+    case "background":
+      return m.view ? [["b", m.view]] : [];
+    case "rowBg":
+      return m.view ? [["r", m.view]] : [];
+    case "overlay":
+      return [["v", m.view]];
+    case "tabItem":
+      return [["t", m.label]];
+    case "toolbar":
+      return m.items.map((item, k) => [`i${k}x`, item.view] as [string, ViewNode[]]);
+    case "inset":
+      return [["s", m.view]];
+    case "accessory":
+      return [["a", m.view]];
+    case "mask":
+      return [["k", m.view]];
+    default:
+      return [];
+  }
+}
+
+export function mapModViews(m: Mod, fn: (n: ViewNode) => ViewNode): Mod {
+  switch (m.m) {
+    case "background":
+    case "rowBg":
+      return m.view ? { ...m, view: m.view.map(fn) } : m;
+    case "overlay":
+    case "inset":
+    case "accessory":
+    case "mask":
+      return { ...m, view: m.view.map(fn) };
+    case "tabItem":
+      return { ...m, label: m.label.map(fn) };
+    case "toolbar":
+      return { ...m, items: m.items.map((item) => ({ ...item, view: item.view.map(fn) })) };
+    default:
+      return m;
+  }
+}
 
 export interface SrcRange {
   f: string;
@@ -122,6 +191,14 @@ export interface PreviewEvent {
 
 export interface Diagnostic {
   message: string;
+  line: number;
+  column: number;
+}
+
+export interface Issue {
+  kind: "error" | "unsupported" | "skipped";
+  message: string;
+  file?: string;
   line: number;
   column: number;
 }

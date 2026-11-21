@@ -69,12 +69,19 @@ Options: `-Yes` (accept every default), `-SkipWindowsToolchain`, `-SkipIos`, `-S
 **Editor**
 - **Monaco** with a monochrome or Xcode theme, tabs, minimap, a jump bar that follows the symbol under the cursor, Quick Open (`Ctrl+P`) and the Command Palette (`Ctrl+Shift+P`).
 - **SourceKit-LSP**: completion, hover help, go to definition, rename and live diagnostics. WSL warms up in the background at launch, so it is ready when you are.
-- **Format on save** with SourceKit-LSP, and **search and replace** across the whole project (`Ctrl+Shift+F`).
+- **Format on save** with SourceKit-LSP, and **search and replace** across the whole project (`Ctrl+Shift+F`), with whole words and regular expressions.
+- **Split editor** (`Ctrl+\`): the same file or another one side by side. Quick Open also finds types and functions across the project.
+- **Images** open in a viewer, and new files start from a template: SwiftUI view with its preview, Swift file, observable model.
 - **SwiftUI Library** (`Ctrl+Shift+L`): about sixty views, modifiers and snippets, inserted with tab stops.
+
+**Source control**
+- **Git built in** (`Ctrl+2`): stage, commit, switch or create branches, fetch, pull and push, and browse the history.
+- **Changes at a glance**: a letter on changed files in the navigator, colored bars in the editor gutter, and a side-by-side comparison with the last commit where each change can be reverted.
 
 **Canvas**
 - **Live SwiftUI preview** (`Ctrl+Alt+Enter`) next to the code, redrawn as you type. A built-in Swift interpreter runs your views, `#Preview` blocks and `PreviewProvider`s, with `@State`, bindings, `@Observable` models, navigation, tabs, lists, forms and controls that respond to clicks.
 - **29 iPhones and 6 iPads**, from iPhone 11 to iPhone 17 Pro Max: real screen sizes, safe areas, Dynamic Island or notch, portrait or landscape, light and dark, every Dynamic Type size. Each model comes with a frame-time estimate against its chip and refresh rate.
+- **Your whole project**: views, models, themes and colors from every file are used, and files changed outside the editor are picked up. Swift Charts, `Path`, custom shapes, `Canvas`, gradients, Liquid Glass and toolbars are drawn.
 - **Animations and assets**: `withAnimation`, `.animation` and `.transition` play as you click; colors, SVG images and custom fonts come from your project.
 - **Live on iPhone**: the free XWinCode Preview app draws the same preview with Apple's real SwiftUI on your iPhone, over USB or Wi-Fi, sends your taps back, and reports real fps, memory, CPU and thermal state. One click installs it from the Canvas. Take a screenshot of the iPhone or record a video of the preview without leaving the Canvas.
 - **Selection mode**: click a view in the preview to jump to its code, and see the view under the cursor outlined. The **view inspector** changes its font, colors, padding, frame or text and rewrites the code for you. **Variants** show light and dark, several screen sizes, text sizes, orientations or every `#Preview` side by side.
@@ -88,7 +95,7 @@ Options: `-Yes` (accept every default), `-SkipWindowsToolchain`, `-SkipIos`, `-S
 - **Debugger** for Windows programs, built on LLDB: breakpoints in the gutter (`F9`), variables, call stack, Continue (`F5`), Step Over (`F10`), Step Into (`F11`) and Step Out (`Shift+F11`).
 - **iPhone apps**: built, signed and installed by [xtool](https://github.com/xtool-org/xtool) in WSL, over USB or Wi-Fi.
 - **Project templates**: iOS app (SwiftUI), Windows command-line tool, library with tests.
-- **Project settings**: bundle ID, display name, version and build, app icon (drop any image, it is cropped to 1024 × 1024) and privacy permissions, without touching `Info.plist` by hand.
+- **Project settings**: bundle ID, display name, version and build, app icon (drop any image, it is cropped to 1024 × 1024), privacy permissions, minimum iOS version, devices, orientations, capabilities (HealthKit, App Groups, push…) and background modes, without touching `Info.plist` or the entitlements file by hand.
 
 **iPhone**
 - **Native detection** over usbmuxd and lockdown, with no extra tool on Windows.
@@ -147,6 +154,8 @@ The setup script and **Settings → Tools & SDKs** take care of all of it.
 | Quick Open | `Ctrl+P` |
 | Command Palette | `Ctrl+Shift+P` |
 | Find in Project | `Ctrl+Shift+F` |
+| Source Control | `Ctrl+2` |
+| Split Editor | `Ctrl+\` |
 | SwiftUI Library | `Ctrl+Shift+L` |
 | Canvas | `Ctrl+Alt+Enter` |
 | Toggle Breakpoint | `F9` |

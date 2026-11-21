@@ -151,6 +151,11 @@ function useTheme() {
     };
   }, [pref, editorTheme]);
   useEffect(() => {
+    const sync = () => void useStore.getState().syncDisk();
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
+  }, []);
+  useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("vibrant", vibrancy);
     root.dataset.material = vibrancy ? material : "none";

@@ -8,6 +8,7 @@ mod device;
 mod diagnostics;
 mod env;
 mod fsops;
+mod git;
 mod idevice;
 mod installs;
 mod lsp;
@@ -114,6 +115,21 @@ pub fn run() {
             fsops::search_project,
             fsops::replace_in_file,
             fsops::list_files,
+            fsops::project_symbols,
+            fsops::list_sources,
+            fsops::duplicate_path,
+            fsops::import_paths,
+            fsops::move_path,
+            git::git_status,
+            git::git_original,
+            git::git_stage,
+            git::git_discard,
+            git::git_commit,
+            git::git_init,
+            git::git_branches,
+            git::git_switch,
+            git::git_sync,
+            git::git_log,
             project::create_project,
             project::open_project,
             project::default_projects_dir,

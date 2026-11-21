@@ -121,6 +121,125 @@ enum Modifiers {
             return AnyView(view.onTapGesture {
                 events.send(id, "tap", .null)
             })
+        case "toolbar":
+            return toolbar(mod, view, depth: depth)
+        case "inset":
+            return inset(mod, view, depth: depth)
+        case "accessory":
+            return Glass26.accessory(mod.nodes, view, depth: depth)
+        case "glass":
+            return Glass26.effect(mod, view)
+        case "effect":
+            return effect(mod, view)
+        case "position":
+            return AnyView(view.position(x: mod.value("x"), y: mod.value("y")))
+        case "badge":
+            return AnyView(view.badge(Text(verbatim: mod.string("text") ?? "")))
+        case "search":
+            return AnyView(view.searchable(text: .constant(""), prompt: Text(verbatim: mod.string("prompt") ?? "")))
+        case "mask":
+            return AnyView(view.mask {
+                NodeList(nodes: mod.nodes, depth: depth + 1)
+            })
+        case "gridSpan":
+            return AnyView(view.gridCellColumns(max(1, Int(min(mod.number("value") ?? 1, 64)))))
+        case "scrollBg":
+            return AnyView(view.scrollContentBackground(mod.fields["hidden"]?.bool == true ? .hidden : .automatic))
+        case "rowSep":
+            return AnyView(view.listRowSeparator(mod.fields["hidden"]?.bool == true ? .hidden : .automatic))
+        case "rowInsets":
+            let insets = EdgeInsets(
+                top: mod.value("top"),
+                leading: mod.value("leading"),
+                bottom: mod.value("bottom"),
+                trailing: mod.value("trailing")
+            )
+            return AnyView(view.listRowInsets(insets))
+        case "rowBg":
+            if !mod.nodes.isEmpty {
+                return AnyView(view.listRowBackground(NodeList(nodes: mod.nodes, depth: depth + 1)))
+            }
+            guard let fill = Palette.color(mod.fields["color"]) else { return view }
+            return AnyView(view.listRowBackground(fill))
+        default:
+            return view
+        }
+    }
+
+    private static func toolbar(_ mod: Mod, _ view: AnyView, depth: Int) -> AnyView {
+        func placed(_ test: (String) -> Bool) -> [ViewNode] {
+            mod.nodes.filter { test($0.string("placement") ?? "automatic") }.flatMap(\.children)
+        }
+        let isLeading: (String) -> Bool = { $0.lowercased().contains("leading") || $0 == "cancellationAction" || $0 == "navigation" }
+        let isBottom: (String) -> Bool = { $0 == "bottomBar" || $0 == "status" }
+        let leading = placed(isLeading)
+        let bottom = placed(isBottom)
+        let principal = placed { $0 == "principal" }
+        let trailing = placed { !isLeading($0) && !isBottom($0) && $0 != "principal" && $0 != "keyboard" }
+        return AnyView(
+            view.toolbar {
+                if !leading.isEmpty {
+                    ToolbarItemGroup(placement: .topBarLeading) {
+                        NodeList(nodes: leading, depth: depth + 1)
+                    }
+                }
+                if !principal.isEmpty {
+                    ToolbarItem(placement: .principal) {
+                        NodeList(nodes: principal, depth: depth + 1)
+                    }
+                }
+                if !trailing.isEmpty {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        NodeList(nodes: trailing, depth: depth + 1)
+                    }
+                }
+                if !bottom.isEmpty {
+                    ToolbarItemGroup(placement: .bottomBar) {
+                        NodeList(nodes: bottom, depth: depth + 1)
+                    }
+                }
+            }
+        )
+    }
+
+    private static func inset(_ mod: Mod, _ view: AnyView, depth: Int) -> AnyView {
+        switch mod.string("edge") {
+        case "top":
+            return AnyView(view.safeAreaInset(edge: .top) {
+                NodeList(nodes: mod.nodes, depth: depth + 1)
+            })
+        case "leading":
+            return AnyView(view.safeAreaInset(edge: .leading) {
+                NodeList(nodes: mod.nodes, depth: depth + 1)
+            })
+        case "trailing":
+            return AnyView(view.safeAreaInset(edge: .trailing) {
+                NodeList(nodes: mod.nodes, depth: depth + 1)
+            })
+        default:
+            return AnyView(view.safeAreaInset(edge: .bottom) {
+                NodeList(nodes: mod.nodes, depth: depth + 1)
+            })
+        }
+    }
+
+    private static func effect(_ mod: Mod, _ view: AnyView) -> AnyView {
+        let value = mod.number("value") ?? 0
+        switch mod.string("kind") {
+        case "blur":
+            return AnyView(view.blur(radius: CGFloat(min(max(value, 0), 500))))
+        case "brightness":
+            return AnyView(view.brightness(min(max(value, -1), 1)))
+        case "contrast":
+            return AnyView(view.contrast(min(max(value, 0), 10)))
+        case "saturation":
+            return AnyView(view.saturation(min(max(value, 0), 10)))
+        case "grayscale":
+            return AnyView(view.grayscale(min(max(value, 0), 1)))
+        case "hueRotation":
+            return AnyView(view.hueRotation(.degrees(value)))
+        case "colorInvert":
+            return AnyView(view.colorInvert())
         default:
             return view
         }
@@ -179,8 +298,10 @@ enum Modifiers {
         switch name {
         case "borderedProminent": return AnyView(view.buttonStyle(.borderedProminent))
         case "bordered": return AnyView(view.buttonStyle(.bordered))
-        case "plain": return AnyView(view.buttonStyle(.plain))
+        case "plain", "custom": return AnyView(view.buttonStyle(.plain))
         case "borderless": return AnyView(view.buttonStyle(.borderless))
+        case "glass": return Glass26.button(false, view)
+        case "glassProminent": return Glass26.button(true, view)
         default: return AnyView(view.buttonStyle(.automatic))
         }
     }

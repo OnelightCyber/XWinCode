@@ -4,6 +4,97 @@ Every notable change to XWinCode is listed here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-21
+
+### Added
+
+#### Canvas
+
+- Swift Charts: `Chart` with `BarMark`, `LineMark`, `AreaMark`, `PointMark`, `RuleMark`, `RectangleMark` and `SectorMark`, with series colors, stacking, a legend, `chartYScale`, `chartXScale` and hidden axes.
+- `Path`, custom `Shape` types with `path(in:)`, and `Canvas` drawing (`fill`, `stroke`, `draw`, translate, scale and rotate) are drawn for real, at the size the view actually gets.
+- `GeometryReader` now receives the real size of its container instead of the whole screen.
+- Liquid Glass: `.glassEffect`, `GlassEffectContainer`, `.buttonStyle(.glass)` and `.glassProminent`, and `.tabViewBottomAccessory`.
+- Navigation bars show their `.toolbar` items (leading, trailing, principal and bottom bar) and the `.searchable` field. `NavigationSplitView` shows its columns on iPad.
+- `Gauge`, `.safeAreaInset`, `.badge`, `.position`, `.blur`, `.brightness`, `.contrast`, `.saturation`, `.grayscale`, `.hueRotation`, `.colorInvert`, `.clipped`, `.labelStyle` and custom `ButtonStyle` types.
+- `.onAppear`, `.task` and `.onChange` run, so screens that load their data on appear are no longer empty. `.environment(_:)` and `.environmentObject(_:)` share the object you pass.
+- A view that takes a model or a list it was not given gets sample data: a `static let sample` or `samples` of the type when there is one, placeholder items otherwise.
+- Swift files added, changed, moved or removed outside the editor reach the preview, for example after a pull or a branch switch.
+- "Things to check" in the Canvas footer lists what could not be drawn exactly or failed to run, and a click jumps to the line.
+- 76 more SF Symbols.
+
+#### Live on iPhone
+
+- The companion app draws charts with Swift Charts, paths, custom shapes, canvases and gauges, and applies toolbars, safe-area insets, badges, the search field, masks, blur and color effects, label styles, and trimmed, dashed and round-capped strokes. Liquid Glass and the tab bar accessory use the real effect on iOS 26 and a material on earlier versions. Reinstall the companion app from the Canvas to get them.
+
+#### Source control
+
+- A Source Control navigator (Ctrl+2) shows the Git changes of the project. Stage or unstage files, write a message and commit, switch or create a branch, fetch, pull and push, and browse the recent history. A project that is not a repository can become one in a click.
+- Changed files carry a letter in the project navigator, and folders that contain changes carry a dot.
+- Added, modified and removed lines are marked in the editor gutter, against the last commit.
+- "Show Changes" opens a side-by-side comparison with the last commit. The right side stays editable, and each change can be reverted on its own.
+- Git only runs in projects you trust.
+
+#### Project
+
+- New files from a template: SwiftUI view with its preview, Swift file, observable model or empty file.
+- Duplicate a file or a folder, and move one by dragging it onto a folder.
+- Files and folders dropped from Explorer onto the project navigator are copied into the folder under the pointer.
+- Images open in a viewer with their size, on a checkerboard for transparency.
+- Project Settings gained the minimum iOS version, the supported devices, the allowed orientations and a forced light or dark appearance.
+- Project Settings gained capabilities (HealthKit, HomeKit, App Groups, push notifications, Sign in with Apple, NFC, associated domains) and background modes. They are written to the entitlements file and to Info.plist.
+
+#### Editor
+
+- Split editor (Ctrl+\\): a second pane shows the same file or another one. "Open to the Side" in the project navigator, or Alt+click on a file.
+- Find in Project can match whole words and regular expressions. Replace accepts `$1` groups with a regular expression.
+- Open Quickly also finds types and functions across the project and jumps to their line.
+- A file changed outside XWinCode (git, another editor, a build tool) is reloaded when you come back to the window. If you also have unsaved edits in it, they are kept and XWinCode tells you.
+
+### Changed
+
+- A view the preview does not know no longer hides what it contains: its content is drawn, and a view from a library gets a labeled placeholder.
+- One line that fails no longer blanks the whole screen: the rest of the view is drawn and the failing part is marked.
+- The preview keeps `static let` values and singletons between redraws, and stops code that takes too long instead of freezing the editor. A project whose first frame took a second now redraws in a few milliseconds.
+- `ignoresSafeArea` backgrounds extend behind the navigation bar, the large title and the tab bar.
+- Circles, rings and circle-shaped glass, clips and backgrounds stay round in a frame that is not square. A trimmed circle draws the right arc.
+- Rows in a list fill the row and stay aligned to the leading edge.
+
+### Fixed
+
+- The Canvas could stop following the code for several seconds after showing a view that kept resizing, such as a `GeometryReader` with an animation.
+- `GeometryReader` now takes the space it is offered instead of the size of its content.
+- Content inside `.frame(maxWidth: .infinity, maxHeight: .infinity)` was pinned to the top instead of following the frame alignment.
+- `.background { }` views were squashed to a thin band and `.overlay(alignment:)` ignored its vertical alignment.
+- Backgrounds made of a colour or a material now extend under the status bar and the home indicator, as on iOS.
+- `LinearGradient`, `RadialGradient` and `AngularGradient` were drawn as one flat colour.
+- `.scrollContentBackground`, `.listRowBackground`, `.listRowSeparator` and `.listRowInsets` were ignored.
+- A button whose label uses `.frame(maxWidth: .infinity)` did not take the full width, and a horizontal `ScrollView` took the whole height.
+- `LazyVGrid` cells were aligned to the left instead of centred, shapes ignored `.aspectRatio`, and `.frame(maxWidth:)` with a number did not size the view.
+- A view inside a `ZStack` could be hidden behind an earlier one.
+- The Canvas now starts in the appearance the app forces through `UIUserInterfaceStyle` or `.preferredColorScheme`.
+- `ProcessInfo.processInfo` and `UIDevice.current` printed their own names instead of values.
+- The Welcome window and the language server handshake showed version 0.1.0.
+- Closing or moving a file could log an error when the language server reported on it afterwards.
+- Renaming a folder left the tabs of the files inside it pointing at the old path, and renaming a file with unsaved edits marked those edits as saved.
+- `Spacer` did not push views apart in the Canvas: a value after a `Spacer` now sits at the far edge.
+- Text typed while a file was being saved was marked as saved and could be lost on close.
+- A save that failed still let the tab close, the build start, the update install or the app quit.
+- Opening a file that is not valid UTF-8 replaced its unreadable bytes, and saving then damaged the file. Such a file is now refused.
+- A crash or a full disk during a save could leave the file truncated. Saves are now written to a temporary file and swapped in.
+- Renaming a file to change only the case of its name (`view.swift` to `View.swift`) was refused.
+- Saving, creating and renaming files and typing in the terminal no longer run on the interface thread.
+- Starting two builds at the same moment could leave the first one running with no way to stop it.
+- Swift the preview read wrongly: `for … where`, `for try await`, `async let`, `case … where`, `case is`, open ranges (`2...`, `..<5`), closed ranges of `Double`, `as?`, one-line type declarations, property observers (`didSet`, `willSet`), computed properties with a setter, `lazy var`, custom `subscript`, `dict[key, default:]`, operators passed as functions (`reduce(0, +)`, `sorted(by: >)`), `rawValue` inside an enum, `Optional.map`, `reduce(into:)`, `Dictionary(grouping:by:)`, `zip` with `$0` and `$1`, key paths in `contains(where:)`, `self = …` in a mutating method, class inheritance, `super.init`, default implementations from a protocol extension, extension initializers, explicit `init`s with a trailing closure, and `State(initialValue:)`.
+- `Text(_:format:)`, `Text(_:style:)`, `\(value, format:)`, `.formatted(date:time:)`, `.dateTime`, `.currency(code:)`, `Calendar.current` and date arithmetic give real values.
+- Loops and ranges longer than 1,000 items were cut short without notice.
+- A global function was not called from inside a type when the type had no method of that name.
+- Editing a model's code kept running the old code for objects already on screen.
+- Text typed while the language server restarted could leave it out of step with the file until the file was reopened.
+
+### Security
+
+- DOMPurify 3.4.17, Vite 8.3.8 and rustls 0.23.46 fix the advisories reported against the previous versions.
+
 ## [2.0.0] - 2026-10-08
 
 ### Added
@@ -102,6 +193,7 @@ The first public release: Xcode, for Windows.
 - Updates are verified against the public key built into the app, and each signature is bound to its version, so an older release cannot be passed off as a newer one.
 - Device identifiers, bundle IDs, distribution names and paths are validated or quoted before they reach a shell, and system tools always start from `System32`.
 
-[Unreleased]: https://github.com/OnelightCyber/XWinCode/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/OnelightCyber/XWinCode/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/OnelightCyber/XWinCode/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/OnelightCyber/XWinCode/compare/v0.1.0...v2.0.0
 [0.1.0]: https://github.com/OnelightCyber/XWinCode/releases/tag/v0.1.0

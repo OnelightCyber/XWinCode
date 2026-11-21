@@ -22,7 +22,40 @@ enum Palette {
         return UIColor(red: channels[0], green: channels[1], blue: channels[2], alpha: channels.count > 3 ? channels[3] : 1)
     }
 
+    static func unit(_ value: JSONValue?, _ fallback: UnitPoint) -> UnitPoint {
+        guard let parts = value?.array, parts.count >= 2 else { return fallback }
+        return UnitPoint(x: CGFloat(parts[0].number ?? 0), y: CGFloat(parts[1].number ?? 0))
+    }
+
+    static func gradient(_ value: JSONValue?) -> AnyShapeStyle? {
+        guard let spec = value?.object, let kind = spec["kind"]?.string else { return nil }
+        let raw = (spec["stops"]?.array ?? []).prefix(64)
+        var stops: [Gradient.Stop] = []
+        for (index, item) in raw.enumerated() {
+            guard let fields = item.object, let fill = color(fields["color"]) else { continue }
+            let even = raw.count > 1 ? Double(index) / Double(raw.count - 1) : 0
+            stops.append(Gradient.Stop(color: fill, location: CGFloat(min(max(fields["at"]?.number ?? even, 0), 1))))
+        }
+        guard !stops.isEmpty else { return nil }
+        let ramp = Gradient(stops: stops.sorted { $0.location < $1.location })
+        switch kind {
+        case "radial":
+            let start = CGFloat(max(spec["r0"]?.number ?? 0, 0))
+            let end = CGFloat(max(spec["r1"]?.number ?? 200, 1))
+            return AnyShapeStyle(RadialGradient(gradient: ramp, center: unit(spec["center"], .center), startRadius: start, endRadius: max(end, start + 1)))
+        case "angular":
+            let from = spec["a0"]?.number ?? 0
+            guard let to = spec["a1"]?.number else {
+                return AnyShapeStyle(AngularGradient(gradient: ramp, center: unit(spec["center"], .center), angle: .degrees(from)))
+            }
+            return AnyShapeStyle(AngularGradient(gradient: ramp, center: unit(spec["center"], .center), startAngle: .degrees(from), endAngle: .degrees(to)))
+        default:
+            return AnyShapeStyle(LinearGradient(gradient: ramp, startPoint: unit(spec["from"], .top), endPoint: unit(spec["to"], .bottom)))
+        }
+    }
+
     static func style(_ value: JSONValue?) -> AnyShapeStyle? {
+        if let ramp = gradient(value?.object?["gradient"]) { return ramp }
         if let spec = value?.object, spec["rgba"] == nil, let name = spec["name"]?.string,
            name == "primary" || name == "secondary" {
             let base: HierarchicalShapeStyle = name == "primary" ? .primary : .secondary

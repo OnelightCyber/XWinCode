@@ -1,7 +1,8 @@
 import { Fragment, memo, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { cssColor } from "../../lib/preview/colors";
+import { cssColor, cssPaint } from "../../lib/preview/colors";
 import { sfSymbol } from "../../lib/preview/sf";
 import type { AnimCurve, ColorSpec, FontSpec, Mod, PreviewEvent, ShapeSpec, TextStyle, ViewNode, Weight } from "../../lib/preview/types";
+import { CanvasView, ChartView, CircleView, GaugeView, GlassDisc, LARGE_PLACEHOLDERS, Measured, PathView, Placeholder } from "./PreviewExtras";
 
 export interface RenderEnv {
   dark: boolean;
@@ -9,6 +10,7 @@ export interface RenderEnv {
   buttonStyle: string;
   controlSize: string;
   listStyle: string;
+  listBg?: boolean;
   pickerStyle: string;
   textFieldStyle: string;
   disabled: boolean;
@@ -18,6 +20,7 @@ export interface RenderEnv {
   entering?: Set<string>;
   dispatch: (ev: PreviewEvent) => void;
   push?: (nodes: ViewNode[], title: string) => void;
+  measure?: (key: string, width: number, height: number) => void;
 }
 
 const STYLES: Record<TextStyle, [number, number, number]> = {
@@ -88,32 +91,130 @@ export function curveCss(c: AnimCurve): { duration: number; easing: string } {
 }
 
 const color = (c: ColorSpec | undefined, env: RenderEnv) => cssColor(c, env.dark, "blue");
+const paint = (c: ColorSpec | undefined, env: RenderEnv) => cssPaint(c, env.dark, "blue");
 
 interface Expand {
   x: boolean;
   y: boolean;
+  cx?: boolean;
+  cy?: boolean;
 }
 
-function frameMod(n: ViewNode): Extract<Mod, { m: "frame" }> | undefined {
-  return n.mods?.filter((m): m is Extract<Mod, { m: "frame" }> => m.m === "frame").pop();
+function edgeMasks(mods: Mod[], steps: Expand[], edge: number): number[] {
+  const out = new Array<number>(mods.length + 1).fill(0);
+  out[mods.length] = edge;
+  for (let i = mods.length - 1; i >= 0 && out[i + 1]; i--) {
+    let mask = out[i + 1];
+    const mod = mods[i];
+    switch (mod.m) {
+      case "padding":
+        if (mod.top > 0) mask &= ~1;
+        if (mod.bottom > 0) mask &= ~2;
+        break;
+      case "frame":
+        if (!steps[i].y) {
+          const a = mod.alignment ?? "center";
+          mask &= (/^top|Top/.test(a) ? 1 : 0) | (/^bottom|Bottom/.test(a) ? 2 : 0);
+        }
+        break;
+      case "inset":
+        if (mod.edge === "top") mask &= ~1;
+        else if (mod.edge === "bottom") mask &= ~2;
+        break;
+      case "ignoresSafeArea":
+      case "offset":
+      case "position":
+      case "scale":
+      case "rotation":
+      case "aspect":
+      case "clip":
+      case "cornerRadius":
+      case "glass":
+        mask = 0;
+        break;
+    }
+    out[i] = mask;
+  }
+  return out;
+}
+
+type FrameMod = Extract<Mod, { m: "frame" }>;
+
+function aspectBox(n: ViewNode, at: number, ex: Expand): CSSProperties | null {
+  const m = n.mods?.[at];
+  if (!m || m.m !== "aspect" || m.ratio === undefined || !(m.ratio > 0) || n.type === "Image" || !ex.x || !ex.y) return null;
+  const next = n.mods?.slice(at + 1).find((x): x is FrameMod => x.m === "frame");
+  const w = next?.width;
+  const h = next?.height;
+  if (w !== undefined && h !== undefined) {
+    const fit = m.mode === "fill" ? Math.max(w, h * m.ratio) : Math.min(w, h * m.ratio);
+    return { width: fit, height: fit / m.ratio, flex: "0 0 auto" };
+  }
+  if (h !== undefined) return { width: h * m.ratio, height: h, flex: "0 0 auto" };
+  if (w !== undefined) return { width: w, height: w / m.ratio, flex: "0 0 auto" };
+  return { aspectRatio: String(m.ratio), alignSelf: "stretch", flex: "0 0 auto" };
+}
+
+function afterMod(n: ViewNode, at: number, ex: Expand): Expand {
+  const m = n.mods?.[at];
+  if (!m) return ex;
+  if (m.m === "frame") {
+    let out = ex;
+    if (m.width !== undefined) out = { ...out, x: false, cx: false };
+    else if (m.maxWidth === "inf") out = { ...out, x: true, cx: false };
+    else if (typeof m.maxWidth === "number") out = { ...out, x: true, cx: true };
+    if (m.height !== undefined) out = { ...out, y: false, cy: false };
+    else if (m.maxHeight === "inf") out = { ...out, y: true, cy: false };
+    else if (typeof m.maxHeight === "number") out = { ...out, y: true, cy: true };
+    return out;
+  }
+  if (m.m === "aspect") {
+    const box = aspectBox(n, at, ex);
+    if (box) return { x: box.width === undefined, y: false };
+  }
+  return ex;
 }
 
 export function expands(n: ViewNode): Expand {
-  const f = frameMod(n);
+  let ex = intrinsic(n);
+  const count = n.mods?.length ?? 0;
+  for (let i = 0; i < count; i++) ex = afterMod(n, i, ex);
+  return ex;
+}
+
+function intrinsic(n: ViewNode): Expand {
   let base: Expand;
   switch (n.type) {
+    case "ScrollView":
+      base = { x: true, y: n.props.axis !== "horizontal" };
+      break;
+    case "Button":
+    case "NavigationLink": {
+      const kids = (n.label ?? []).map(expands);
+      base = { x: kids.some((k) => k.x && !k.cx), y: kids.some((k) => k.y && !k.cy) };
+      break;
+    }
     case "Color":
     case "Rectangle":
     case "RoundedRectangle":
     case "Capsule":
     case "Ellipse":
     case "Circle":
-    case "ScrollView":
     case "List":
     case "Form":
     case "NavigationStack":
     case "TabView":
+    case "SplitView":
+    case "Chart":
+    case "Canvas":
+    case "Path":
       base = { x: true, y: true };
+      break;
+    case "Gauge":
+      base = { x: !/^(accessoryCircular|circular)/.test(String(n.props.style ?? "")), y: false };
+      break;
+    case "Unsupported":
+      base = LARGE_PLACEHOLDERS.has(String(n.props.kind ?? "")) && !n.props.error ? { x: true, y: true } : { x: false, y: false };
       break;
     case "TextField":
     case "SecureField":
@@ -140,19 +241,13 @@ export function expands(n: ViewNode): Expand {
       const kids = (n.children ?? []).map(expands);
       const spacerY = (n.type === "VStack" || n.type === "LazyVStack") && (n.children ?? []).some((c) => c.type === "Spacer");
       const spacerX = (n.type === "HStack" || n.type === "LazyHStack") && (n.children ?? []).some((c) => c.type === "Spacer");
-      base = { x: spacerX || kids.some((k) => k.x) || n.type === "LazyVGrid", y: spacerY || kids.some((k) => k.y) };
+      base = n.props.geometry ? { x: true, y: true } : { x: spacerX || kids.some((k) => k.x && !k.cx) || n.type === "LazyVGrid", y: spacerY || kids.some((k) => k.y && !k.cy) };
       break;
     }
     default:
       base = { x: false, y: false };
   }
   if (n.mods?.some((m) => m.m === "aspect") && n.mods.some((m) => m.m === "resizable")) base = { x: true, y: true };
-  if (f) {
-    if (f.width !== undefined) base = { ...base, x: false };
-    if (f.height !== undefined) base = { ...base, y: false };
-    if (f.maxWidth === "inf") base = { ...base, x: true };
-    if (f.maxHeight === "inf") base = { ...base, y: true };
-  }
   return base;
 }
 
@@ -186,6 +281,9 @@ function envAfter(env: RenderEnv, mods: Mod[] | undefined): RenderEnv {
         break;
       case "listStyle":
         out = { ...out, listStyle: m.value };
+        break;
+      case "scrollBg":
+        out = { ...out, listBg: !m.hidden };
         break;
       case "pickerStyle":
         out = { ...out, pickerStyle: m.value };
@@ -255,9 +353,19 @@ function inheritedCss(mods: Mod[] | undefined, env: RenderEnv): CSSProperties {
   return css;
 }
 
-const WRAPPERS = new Set(["padding", "frame", "background", "overlay", "clip", "cornerRadius", "border", "shadow", "opacity", "offset", "rotation", "scale", "hidden", "onTap", "ignoresSafeArea"]);
+const WRAPPERS = new Set(["padding", "frame", "background", "overlay", "clip", "cornerRadius", "border", "shadow", "opacity", "offset", "rotation", "scale", "hidden", "onTap", "ignoresSafeArea", "inset", "glass", "effect", "position", "badge", "aspect"]);
 
-export const Node = memo(function PreviewNode({ node, env, axis }: { node: ViewNode; env: RenderEnv; axis: "x" | "y" | "z" | "none" }) {
+const EFFECTS: Record<Extract<Mod, { m: "effect" }>["kind"], (v: number) => string> = {
+  blur: (v) => `blur(${v}px)`,
+  brightness: (v) => `brightness(${1 + v})`,
+  contrast: (v) => `contrast(${v})`,
+  saturation: (v) => `saturate(${v})`,
+  grayscale: (v) => `grayscale(${v})`,
+  hueRotation: (v) => `hue-rotate(${v}deg)`,
+  colorInvert: () => "invert(1)",
+};
+
+export const Node = memo(function PreviewNode({ node, env, axis, edge = 0 }: { node: ViewNode; env: RenderEnv; axis: "x" | "y" | "z" | "none"; edge?: number }) {
   const inner = useMemo(() => envAfter(env, node.mods), [env, node.mods]);
   const grouped = useMemo(() => {
     if (node.type !== "Group") return null;
@@ -268,18 +376,49 @@ export const Node = memo(function PreviewNode({ node, env, axis }: { node: ViewN
     if (!grouped.length) return null;
     return (
       <>
-        {grouped.map((c) => (
-          <Node key={c.id} node={c} env={env} axis={axis} />
+        {grouped.map((c, i) => (
+          <Node key={c.id} node={c} env={env} axis={axis} edge={axis === "y" ? (i === 0 ? edge & 1 : 0) | (i === grouped.length - 1 ? edge & 2 : 0) : edge} />
         ))}
       </>
     );
   }
-  const ex = expands(node);
-  let el: ReactNode = <Base node={node} env={inner} ex={ex} />;
+  const mods = node.mods ?? [];
+  const steps: Expand[] = [intrinsic(node)];
+  for (let i = 0; i < mods.length; i++) steps.push(afterMod(node, i, steps[i]));
+  const masks = edgeMasks(mods, steps, edge);
+  let ex = steps[0];
+  let el: ReactNode = <Base node={node} env={inner} ex={ex} edge={masks[0]} />;
   const inherited = inheritedCss(node.mods, inner);
   if (Object.keys(inherited).length) el = <div style={{ display: "contents", ...inherited }}>{el}</div>;
-  const mods = (node.mods ?? []).filter((m) => WRAPPERS.has(m.m));
-  for (const m of mods) el = <Wrap mod={m} env={inner} ex={ex}>{el}</Wrap>;
+  let wrapped = false;
+  let rigid = false;
+  let capX: number | undefined;
+  let capY: number | undefined;
+  for (let i = 0; i < mods.length; i++) {
+    const m = mods[i];
+    if (m.m === "frame") {
+      if (m.width !== undefined || m.maxWidth === "inf") capX = undefined;
+      else if (typeof m.maxWidth === "number") capX = m.maxWidth;
+      if (m.height !== undefined || m.maxHeight === "inf") capY = undefined;
+      else if (typeof m.maxHeight === "number") capY = m.maxHeight;
+    } else if (m.m === "padding") {
+      if (capX !== undefined) capX += m.leading + m.trailing;
+      if (capY !== undefined) capY += m.top + m.bottom;
+    }
+    const box = m.m === "aspect" ? aspectBox(node, i, ex) : null;
+    if (WRAPPERS.has(m.m) && (m.m !== "aspect" || box)) {
+      wrapped = true;
+      el = (
+        <Wrap mod={m} env={inner} ex={ex} box={box} edge={masks[i + 1]}>
+          {el}
+        </Wrap>
+      );
+    }
+    if (m.m === "frame") rigid = m.width !== undefined ? true : m.maxWidth === "inf" ? false : rigid;
+    if (box) rigid = box.width !== undefined;
+    ex = steps[i + 1];
+  }
+  if (wrapped && env.inList && !ex.x) el = <div className="pv-lead">{el}</div>;
   const outer: CSSProperties = { display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, boxSizing: "border-box" };
   if (axis === "y") {
     if (ex.y) outer.flex = node.type === "Spacer" ? "1 1 0" : "1 1 auto";
@@ -287,17 +426,37 @@ export const Node = memo(function PreviewNode({ node, env, axis }: { node: ViewN
     if (ex.x) outer.alignSelf = "stretch";
   } else if (axis === "x") {
     if (ex.x) outer.flex = node.type === "Spacer" ? "1 1 0" : "1 1 auto";
-    else outer.flex = "0 1 auto";
+    else outer.flex = rigid ? "0 0 auto" : "0 1 auto";
     if (ex.y) outer.alignSelf = "stretch";
   } else if (axis === "z") {
     if (ex.x) outer.justifySelf = "stretch";
     if (ex.y) outer.alignSelf = "stretch";
   }
+  if (capX !== undefined && ex.x) {
+    if (axis === "x") outer.flex = `0 1 ${capX}px`;
+    else {
+      outer.width = capX;
+      outer.maxWidth = "100%";
+      if (axis === "y") outer.alignSelf = undefined;
+      else outer.justifySelf = undefined;
+    }
+  }
+  if (capY !== undefined && ex.y) {
+    if (axis === "y") outer.flex = `0 1 ${capY}px`;
+    else {
+      outer.height = capY;
+      outer.maxHeight = "100%";
+      outer.alignSelf = undefined;
+    }
+  }
   if (node.type === "Spacer") {
     const min = Number(node.props.minLength ?? 8);
     if (axis === "y") outer.minHeight = min;
     if (axis === "x") outer.minWidth = min;
+    if (axis === "x" || axis === "y") outer.flex = "1 1 0";
   }
+  const span = node.mods?.find((m) => m.m === "gridSpan") as Extract<Mod, { m: "gridSpan" }> | undefined;
+  if (span) outer.gridColumn = `span ${span.value}`;
   const animation = node.mods?.find((m) => m.m === "animation") as Extract<Mod, { m: "animation" }> | undefined;
   if (animation) {
     const { duration, easing } = curveCss(animation.curve);
@@ -317,70 +476,76 @@ export const Node = memo(function PreviewNode({ node, env, axis }: { node: ViewN
   );
 });
 
-function Wrap({ mod, env, ex, children }: { mod: Mod; env: RenderEnv; ex: Expand; children: ReactNode }) {
-  const base: CSSProperties = { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", boxSizing: "border-box", position: "relative", minWidth: 0 };
+function Wrap({ mod, env, ex, box, edge, children }: { mod: Mod; env: RenderEnv; ex: Expand; box: CSSProperties | null; edge: number; children: ReactNode }) {
+  const plain: CSSProperties = { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", boxSizing: "border-box", position: "relative", minWidth: 0, minHeight: 0 };
+  const base: CSSProperties = { ...plain };
   if (ex.x) base.alignSelf = "stretch";
   if (ex.y) base.flex = "1 1 auto";
-  const fill: CSSProperties = ex.x || ex.y ? { flex: ex.y ? "1 1 auto" : undefined, alignSelf: ex.x ? "stretch" : undefined } : {};
   switch (mod.m) {
     case "padding":
       return <div style={{ ...base, padding: `${mod.top}px ${mod.trailing}px ${mod.bottom}px ${mod.leading}px` }}>{children}</div>;
+    case "aspect":
+      return <div style={{ ...plain, ...box }}>{children}</div>;
     case "frame": {
-      const s: CSSProperties = { ...base };
+      const s: CSSProperties = { ...plain };
       if (mod.width !== undefined) s.width = mod.width;
-      if (mod.height !== undefined) s.height = mod.height;
+      else if (mod.maxWidth === "inf") s.alignSelf = "stretch";
+      else if (typeof mod.maxWidth === "number") {
+        s.maxWidth = mod.maxWidth;
+        s.width = "100%";
+      } else if (ex.x) s.alignSelf = "stretch";
+      if (mod.height !== undefined) {
+        s.height = mod.height;
+        s.flexShrink = 0;
+      } else if (mod.maxHeight === "inf") s.flex = "1 1 auto";
+      else if (typeof mod.maxHeight === "number") {
+        s.maxHeight = mod.maxHeight;
+        s.flex = "1 1 auto";
+      } else if (ex.y) s.flex = "1 1 auto";
       if (mod.minWidth !== undefined) s.minWidth = mod.minWidth;
       if (mod.minHeight !== undefined) s.minHeight = mod.minHeight;
-      if (typeof mod.maxWidth === "number") s.maxWidth = mod.maxWidth;
-      if (typeof mod.maxHeight === "number") s.maxHeight = mod.maxHeight;
-      if (mod.maxWidth === "inf") s.alignSelf = "stretch";
-      if (mod.maxHeight === "inf") s.flex = "1 1 auto";
       const a = mod.alignment ?? "center";
-      const h = /leading|Leading/.test(a) ? "flex-start" : /trailing|Trailing/.test(a) ? "flex-end" : "center";
-      const v = /^top|top/.test(a) ? "flex-start" : /bottom|Bottom/.test(a) ? "flex-end" : "center";
-      s.alignItems = h;
-      s.justifyContent = v;
-      if (mod.width !== undefined || mod.height !== undefined) s.flexShrink = 0;
+      s.alignItems = /leading|Leading/.test(a) ? "flex-start" : /trailing|Trailing/.test(a) ? "flex-end" : "center";
+      s.justifyContent = /^top|Top/.test(a) ? "flex-start" : /^bottom|Bottom/.test(a) ? "flex-end" : "center";
       return <div style={s}>{children}</div>;
     }
     case "background": {
       const radius = shapeRadius(mod.shape);
       if (mod.view) {
         return (
-          <div style={{ ...base, display: "grid" }}>
-            <div style={{ gridArea: "1 / 1", display: "flex", flexDirection: "column", alignItems: "stretch", justifyContent: "stretch", borderRadius: radius, overflow: radius !== undefined ? "hidden" : undefined }}>
+          <div style={{ ...base, isolation: "isolate" }}>
+            <div className="pv-zstack pv-under" style={{ borderRadius: radius, overflow: radius !== undefined ? "hidden" : undefined }}>
               {mod.view.map((v) => (
-                <Node key={v.id} node={v} env={env} axis="y" />
+                <Node key={v.id} node={v} env={env} axis="z" />
               ))}
             </div>
-            <div style={{ gridArea: "1 / 1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", ...fill }}>{children}</div>
-          </div>
-        );
-      }
-      if (mod.material) {
-        return (
-          <div className="pv-material" style={{ ...base, borderRadius: radius, background: env.dark ? "rgba(40,40,44,0.72)" : "rgba(246,246,248,0.72)", backdropFilter: "blur(20px) saturate(180%)" }}>
             {children}
           </div>
         );
       }
-      return <div style={{ ...base, background: color(mod.color, env), borderRadius: radius }}>{children}</div>;
+      const round = mod.shape?.shape === "circle";
+      const bleed = mod.shape ? "" : `${edge & 1 ? " pv-fill-top" : ""}${edge & 2 ? " pv-fill-bottom" : ""}`;
+      if (mod.material) {
+        return (
+          <div className={`pv-material${bleed}`} style={{ ...base, borderRadius: round ? undefined : radius, clipPath: round ? "circle(closest-side)" : undefined, background: env.dark ? "rgba(40,40,44,0.72)" : "rgba(246,246,248,0.72)", backdropFilter: "blur(20px) saturate(180%)" }}>
+            {children}
+          </div>
+        );
+      }
+      if (round && mod.color?.gradient) return <div style={{ ...base, background: paint(mod.color, env), clipPath: "circle(closest-side)" }}>{children}</div>;
+      if (round) return <div style={{ ...base, background: `radial-gradient(circle closest-side, ${color(mod.color, env) ?? "transparent"} calc(100% - 0.5px), transparent 100%)` }}>{children}</div>;
+      return (
+        <div className={bleed.trim() || undefined} style={{ ...base, background: paint(mod.color, env), borderRadius: radius }}>
+          {children}
+        </div>
+      );
     }
     case "overlay": {
       const a = mod.alignment ?? "center";
       return (
-        <div style={{ ...base, display: "grid" }}>
-          <div style={{ gridArea: "1 / 1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", ...fill }}>{children}</div>
-          <div
-            style={{
-              gridArea: "1 / 1",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: /leading|Leading/.test(a) ? "flex-start" : /trailing|Trailing/.test(a) ? "flex-end" : "center",
-              justifyContent: /top|Top/.test(a) ? "flex-start" : /bottom|Bottom/.test(a) ? "flex-end" : "center",
-              pointerEvents: "none",
-            }}
-          >
+        <div style={base}>
+          {children}
+          <div className="pv-zstack pv-over" style={{ justifyItems: /leading|Leading/.test(a) ? "start" : /trailing|Trailing/.test(a) ? "end" : "center", alignItems: /^top|Top/.test(a) ? "start" : /^bottom|Bottom/.test(a) ? "end" : "center" }}>
             {mod.view.map((v) => (
               <Node key={v.id} node={v} env={env} axis="z" />
             ))}
@@ -389,7 +554,8 @@ function Wrap({ mod, env, ex, children }: { mod: Mod; env: RenderEnv; ex: Expand
       );
     }
     case "clip":
-      return <div style={{ ...base, borderRadius: shapeRadius(mod.shape), overflow: "hidden", aspectRatio: mod.shape.shape === "circle" ? "1" : undefined }}>{children}</div>;
+      if (mod.shape.shape === "circle") return <div style={{ ...base, clipPath: "circle(closest-side)" }}>{children}</div>;
+      return <div style={{ ...base, borderRadius: shapeRadius(mod.shape), overflow: "hidden" }}>{children}</div>;
     case "cornerRadius":
       return <div style={{ ...base, borderRadius: mod.radius, overflow: "hidden" }}>{children}</div>;
     case "border":
@@ -407,22 +573,68 @@ function Wrap({ mod, env, ex, children }: { mod: Mod; env: RenderEnv; ex: Expand
     case "hidden":
       return <div style={{ ...base, visibility: "hidden" }}>{children}</div>;
     case "ignoresSafeArea":
-      return <div style={{ ...base, margin: "calc(var(--pv-safe-top) * -1) calc(var(--pv-safe-right, 0px) * -1) calc(var(--pv-safe-bottom) * -1) calc(var(--pv-safe-left, 0px) * -1)", padding: "var(--pv-safe-top) var(--pv-safe-right, 0px) var(--pv-safe-bottom) var(--pv-safe-left, 0px)" }}>{children}</div>;
+      return <div className="pv-bleed" style={base}>{children}</div>;
     case "onTap":
       return (
-        <div style={{ ...base, cursor: "pointer" }} onClick={(e) => (e.stopPropagation(), env.dispatch({ id: mod.event, kind: "tap" }))}>
+        <div className="pv-tap" style={{ ...base, cursor: "pointer" }} onClick={(e) => (e.stopPropagation(), env.dispatch({ id: mod.event, kind: "tap" }))}>
           {children}
         </div>
       );
+    case "glass": {
+      const glass = `pv-glass${env.dark ? " dark" : ""}${mod.clear ? " clear" : ""}`;
+      const tinted = color(mod.tint, env) ?? "transparent";
+      if (mod.shape?.shape === "circle")
+        return (
+          <GlassDisc className={glass} style={base} tint={tinted}>
+            {children}
+          </GlassDisc>
+        );
+      return (
+        <div className={glass} style={{ ...base, borderRadius: shapeRadius(mod.shape) ?? 9999, ["--pv-glass-tint" as string]: tinted } as CSSProperties}>
+          {children}
+        </div>
+      );
+    }
+    case "effect":
+      return <div style={{ ...base, filter: EFFECTS[mod.kind](mod.value) }}>{children}</div>;
+    case "position":
+      return <div style={{ position: "absolute", left: mod.x, top: mod.y, transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center" }}>{children}</div>;
+    case "badge":
+      return (
+        <div style={base}>
+          {children}
+          <span className="pv-badge">{mod.text}</span>
+        </div>
+      );
+    case "inset": {
+      const vertical = mod.edge === "top" || mod.edge === "bottom";
+      const before = mod.edge === "top" || mod.edge === "leading";
+      const bar = (
+        <div className="pv-inset" style={{ flexDirection: vertical ? "column" : "row" }}>
+          {mod.view.map((v) => (
+            <Node key={v.id} node={v} env={env} axis={vertical ? "y" : "x"} edge={mod.edge === "bottom" ? edge & 2 : mod.edge === "top" ? edge & 1 : 0} />
+          ))}
+        </div>
+      );
+      return (
+        <div style={{ ...base, flexDirection: vertical ? "column" : "row", alignItems: "stretch", justifyContent: "flex-start" }}>
+          {before && bar}
+          <div style={{ flex: (vertical ? ex.y : ex.x) ? "1 1 auto" : "0 0 auto", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 0, minWidth: 0 }}>{children}</div>
+          {!before && bar}
+        </div>
+      );
+    }
   }
   return <>{children}</>;
 }
 
-function Kids({ nodes, env, axis }: { nodes?: ViewNode[]; env: RenderEnv; axis: "x" | "y" | "z" | "none" }) {
+function Kids({ nodes, env, axis, edge = 0, spread, rest = 0 }: { nodes?: ViewNode[]; env: RenderEnv; axis: "x" | "y" | "z" | "none"; edge?: number; spread?: boolean; rest?: number }) {
+  const list = nodes ?? [];
+  const last = list.length - 1;
   return (
     <>
-      {(nodes ?? []).map((c) => (
-        <Node key={c.id} node={c} env={env} axis={axis} />
+      {list.map((c, i) => (
+        <Node key={c.id} node={c} env={env} axis={axis} edge={!edge ? 0 : spread ? (i === 0 ? edge & 1 : 0) | (i === last ? edge & 2 : 0) : expands(c).y ? edge : edge & rest} />
       ))}
     </>
   );
@@ -441,7 +653,7 @@ function textOf(nodes: ViewNode[] | undefined): string {
   return (nodes ?? []).map((n) => String(n.props.text ?? n.props.title ?? textOf(n.children) ?? "")).join(" ");
 }
 
-function Base({ node, env, ex }: { node: ViewNode; env: RenderEnv; ex: Expand }) {
+function Base({ node, env, ex, edge }: { node: ViewNode; env: RenderEnv; ex: Expand; edge: number }) {
   const p = node.props;
   switch (node.type) {
     case "Text": {
@@ -474,22 +686,17 @@ function Base({ node, env, ex }: { node: ViewNode; env: RenderEnv; ex: Expand })
         </div>
       );
     }
-    case "Label":
+    case "Label": {
+      const showIcon = p.labelStyle !== "titleOnly";
+      const showTitle = p.labelStyle !== "iconOnly";
+      const icon = node.children?.length ? <Kids nodes={node.children} env={env} axis="x" /> : p.system ? <Symbol name={String(p.system)} style={env.inList ? { color: env.tint } : undefined} /> : null;
       return (
         <span className="pv-label">
-          {node.label?.length ? (
-            <>
-              {node.children?.length ? <Kids nodes={node.children} env={env} axis="x" /> : p.system ? <Symbol name={String(p.system)} style={env.inList ? { color: env.tint } : undefined} /> : null}
-              <Kids nodes={node.label} env={env} axis="x" />
-            </>
-          ) : (
-            <>
-              {p.system ? <Symbol name={String(p.system)} style={env.inList ? { color: env.tint } : undefined} /> : null}
-              <span className="pv-text">{String(p.title ?? "")}</span>
-            </>
-          )}
+          {showIcon ? icon : null}
+          {showTitle ? node.label?.length ? <Kids nodes={node.label} env={env} axis="x" /> : <span className="pv-text">{String(p.title ?? "")}</span> : null}
         </span>
       );
+    }
     case "Button":
       return <ButtonView node={node} env={env} ex={ex} />;
     case "NavigationLink":
@@ -581,7 +788,7 @@ function Base({ node, env, ex }: { node: ViewNode; env: RenderEnv; ex: Expand })
     case "Divider":
       return <div className="pv-divider" style={{ background: cssColor({ name: "separator" }, env.dark) }} />;
     case "Color":
-      return <div className="pv-color" style={{ background: color(p.color as ColorSpec, env) }} />;
+      return <div className="pv-color" style={{ background: paint(p.color as ColorSpec, env) }} />;
     case "Rectangle":
     case "RoundedRectangle":
     case "Capsule":
@@ -592,7 +799,7 @@ function Base({ node, env, ex }: { node: ViewNode; env: RenderEnv; ex: Expand })
     case "LazyVStack":
       return (
         <div className="pv-stack" style={{ flexDirection: "column", alignItems: ALIGN[String(p.alignment ?? "center")] ?? "center", gap: p.spacing === undefined || p.spacing === null ? 8 : Number(p.spacing), flex: ex.y ? "1 1 auto" : undefined, alignSelf: ex.x ? "stretch" : undefined }}>
-          <Kids nodes={node.children} env={env} axis="y" />
+          <Kids nodes={node.children} env={env} axis="y" edge={edge} spread />
         </div>
       );
     case "HStack":
@@ -600,26 +807,50 @@ function Base({ node, env, ex }: { node: ViewNode; env: RenderEnv; ex: Expand })
       const a = String(p.alignment ?? "center");
       return (
         <div className="pv-stack" style={{ flexDirection: "row", alignItems: a.includes("Baseline") ? "baseline" : (ALIGN[a] ?? "center"), gap: p.spacing === undefined || p.spacing === null ? 8 : Number(p.spacing), flex: ex.y ? "1 1 auto" : undefined, alignSelf: ex.x ? "stretch" : undefined }}>
-          <Kids nodes={node.children} env={env} axis="x" />
+          <Kids nodes={node.children} env={env} axis="x" edge={edge} />
         </div>
       );
     }
     case "ZStack": {
       const a = String(p.alignment ?? "center");
+      const style: CSSProperties = {
+        justifyItems: /leading|Leading/.test(a) ? "start" : /trailing|Trailing/.test(a) ? "end" : "center",
+        alignItems: /^top|Top/.test(a) ? "start" : /^bottom|Bottom/.test(a) ? "end" : "center",
+        flex: ex.y ? "1 1 auto" : undefined,
+        alignSelf: ex.x ? "stretch" : undefined,
+      };
+      if (typeof p.measure === "string")
+        return (
+          <Measured node={node} env={env} className={p.geometry ? "pv-zstack pv-geo" : "pv-zstack"} style={style}>
+            <Kids nodes={node.children} env={env} axis="z" />
+          </Measured>
+        );
       return (
-        <div
-          className="pv-zstack"
-          style={{
-            justifyItems: /leading|Leading/.test(a) ? "start" : /trailing|Trailing/.test(a) ? "end" : "center",
-            alignItems: /^top|Top/.test(a) ? "start" : /^bottom|Bottom/.test(a) ? "end" : "center",
-            flex: ex.y ? "1 1 auto" : undefined,
-            alignSelf: ex.x ? "stretch" : undefined,
-          }}
-        >
-          <Kids nodes={node.children} env={env} axis="z" />
+        <div className="pv-zstack" style={style}>
+          <Kids nodes={node.children} env={env} axis="z" edge={edge} rest={(/^top|Top/.test(a) ? 1 : 0) | (/^bottom|Bottom/.test(a) ? 2 : 0)} />
         </div>
       );
     }
+    case "Path":
+      return <PathView node={node} env={env} />;
+    case "Canvas":
+      return <CanvasView node={node} env={env} />;
+    case "Chart":
+      return <ChartView node={node} env={env} />;
+    case "Gauge":
+      return <GaugeView node={node} env={env} />;
+    case "SplitView":
+      return (
+        <div className="pv-split" style={{ borderColor: cssColor({ name: "separator" }, env.dark) }}>
+          {(node.children ?? []).map((c) => (
+            <div key={c.id} className={`pv-split-col ${String(c.props.column ?? "detail")}`}>
+              <Node node={c} env={env} axis="y" />
+            </div>
+          ))}
+        </div>
+      );
+    case "ToolbarItem":
+      return <Kids nodes={node.children} env={env} axis="x" />;
     case "LazyVGrid":
       return (
         <div className="pv-grid" style={{ gridTemplateColumns: `repeat(${Number(p.columns ?? 2)}, minmax(0, 1fr))`, gap: p.spacing === undefined || p.spacing === null ? 8 : Number(p.spacing) }}>
@@ -646,28 +877,24 @@ function Base({ node, env, ex }: { node: ViewNode; env: RenderEnv; ex: Expand })
         </div>
       );
     case "NavigationStack":
-      return <NavStack node={node} env={env} />;
+      return <NavStack node={node} env={env} edge={edge} />;
     case "TabView":
-      return <TabsView node={node} env={env} />;
+      return <TabsView node={node} env={env} edge={edge} />;
     case "Unsupported":
-      return (
-        <div className="pv-unsupported">
-          <Symbol name="questionmark.circle" />
-          <span>{String(p.name ?? "")}</span>
-        </div>
-      );
+      return <Placeholder node={node} />;
   }
   if (node.children?.length)
     return (
       <div className="pv-stack" style={{ flexDirection: "column", alignItems: "center", gap: 8 }}>
-        <Kids nodes={node.children} env={env} axis="y" />
+        <Kids nodes={node.children} env={env} axis="y" edge={edge} spread />
       </div>
     );
   return null;
 }
 
-function ButtonView({ node, env }: { node: ViewNode; env: RenderEnv; ex: Expand }) {
+function ButtonView({ node, env, ex }: { node: ViewNode; env: RenderEnv; ex: Expand }) {
   const p = node.props;
+  const fill: CSSProperties = { alignSelf: ex.x ? "stretch" : undefined, flex: ex.y ? "1 1 auto" : undefined };
   const destructive = p.role === "destructive";
   const tint = destructive ? (cssColor({ name: "red" }, env.dark) ?? env.tint) : env.tint;
   const content = node.label?.length ? <Kids nodes={node.label} env={{ ...env, inList: false }} axis="x" /> : <span className="pv-text">{String(p.title ?? "")}</span>;
@@ -675,20 +902,37 @@ function ButtonView({ node, env }: { node: ViewNode; env: RenderEnv; ex: Expand 
   const size = env.controlSize;
   const pad = size === "mini" ? "3px 9px" : size === "small" ? "5px 11px" : size === "large" ? "12px 20px" : size === "extraLarge" ? "15px 24px" : "7px 14px";
   const click = () => !env.disabled && node.event && env.dispatch({ id: node.event, kind: "tap" });
+  if (style === "custom")
+    return (
+      <button className="pv-btn bare" style={fill} onClick={click} disabled={env.disabled}>
+        {content}
+      </button>
+    );
+  if (style === "glass" || style === "glassProminent")
+    return (
+      <button
+        className={`pv-btn pv-glass${env.dark ? " dark" : ""}`}
+        style={{ ...fill, padding: pad, borderRadius: 9999, color: style === "glassProminent" ? "#fff" : "inherit", fontWeight: style === "glassProminent" ? 600 : undefined, ["--pv-glass-tint" as string]: style === "glassProminent" ? tint : "transparent", ["--pv-glass-mix" as string]: style === "glassProminent" ? "88%" : "0%" } as CSSProperties}
+        onClick={click}
+        disabled={env.disabled}
+      >
+        {content}
+      </button>
+    );
   if (style === "borderedProminent")
     return (
-      <button className="pv-btn" style={{ background: tint, color: "#fff", padding: pad, borderRadius: 9999, fontWeight: 600 }} onClick={click} disabled={env.disabled}>
+      <button className="pv-btn" style={{ ...fill, background: tint, color: "#fff", padding: pad, borderRadius: 9999, fontWeight: 600 }} onClick={click} disabled={env.disabled}>
         {content}
       </button>
     );
   if (style === "bordered")
     return (
-      <button className="pv-btn" style={{ background: `color-mix(in srgb, ${tint} 16%, transparent)`, color: tint, padding: pad, borderRadius: 9999 }} onClick={click} disabled={env.disabled}>
+      <button className="pv-btn" style={{ ...fill, background: `color-mix(in srgb, ${tint} 16%, transparent)`, color: tint, padding: pad, borderRadius: 9999 }} onClick={click} disabled={env.disabled}>
         {content}
       </button>
     );
   return (
-    <button className={`pv-btn plain${env.inList ? " in-list" : ""}`} style={{ color: style === "plain" ? "inherit" : tint }} onClick={click} disabled={env.disabled}>
+    <button className={`pv-btn plain${env.inList ? " in-list" : ""}`} style={{ ...fill, color: style === "plain" ? "inherit" : tint }} onClick={click} disabled={env.disabled}>
       {content}
     </button>
   );
@@ -748,39 +992,29 @@ function PickerView({ node, env }: { node: ViewNode; env: RenderEnv }) {
 function ShapeView({ node, env }: { node: ViewNode; env: RenderEnv }) {
   const fill = node.mods?.filter((m) => m.m === "fill").pop() as Extract<Mod, { m: "fill" }> | undefined;
   const stroke = node.mods?.filter((m) => m.m === "stroke").pop() as Extract<Mod, { m: "stroke" }> | undefined;
-  const trim = node.mods?.filter((m) => m.m === "trim").pop() as Extract<Mod, { m: "trim" }> | undefined;
-  const fillCss = stroke && !fill ? "transparent" : (color(fill?.color, env) ?? "currentColor");
-  if (node.type === "Circle" && (stroke || trim)) {
-    const w = stroke?.width ?? 1;
-    const len = trim ? Math.max(0, trim.to - trim.from) : 1;
-    return (
-      <svg className="pv-shape" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
-        <circle
-          cx="50"
-          cy="50"
-          r={50 - w / 2}
-          fill={fillCss === "transparent" ? "none" : fillCss}
-          stroke={stroke ? color(stroke.color, env) : "none"}
-          strokeWidth={w}
-          pathLength={1}
-          strokeDasharray={trim ? `${len} 1` : undefined}
-          strokeDashoffset={trim ? -trim.from : undefined}
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-          transform="rotate(0 50 50)"
-        />
-      </svg>
-    );
-  }
+  const fillCss = stroke && !fill ? "transparent" : (paint(fill?.color, env) ?? "currentColor");
+  const plainDisc = node.type === "Circle" && !!fill?.color.gradient && !stroke && !node.mods?.some((m) => m.m === "trim");
+  if (plainDisc) return <div className="pv-shape" style={{ background: fillCss, clipPath: "circle(closest-side)" }} />;
+  if (node.type === "Circle") return <CircleView node={node} env={env} />;
   const radius =
     node.type === "Circle" || node.type === "Ellipse" ? "50%" : node.type === "Capsule" ? 9999 : node.type === "RoundedRectangle" ? Number(node.props.radius ?? 8) : 0;
+  if (stroke?.color.gradient && !fill)
+    return (
+      <div
+        className="pv-shape pv-ring"
+        style={{
+          borderRadius: radius,
+          border: `${stroke.width}px solid transparent`,
+          background: `${paint(stroke.color, env)} border-box`,
+        }}
+      />
+    );
   return (
     <div
       className="pv-shape"
       style={{
         background: fillCss,
         borderRadius: radius,
-        aspectRatio: node.type === "Circle" ? "1" : undefined,
         boxShadow: stroke ? `inset 0 0 0 ${stroke.width}px ${color(stroke.color, env)}` : undefined,
       }}
     />
@@ -809,8 +1043,12 @@ function ListView({ node, env }: { node: ViewNode; env: RenderEnv }) {
   const plain = env.listStyle === "plain";
   const sections = rowsOf(node.children ?? []);
   const rowEnv = useMemo<RenderEnv>(() => ({ ...env, inList: true, buttonStyle: env.buttonStyle }), [env]);
+  const card = plain ? "transparent" : cssColor({ name: "secondarySystemGroupedBackground" }, env.dark);
+  const backdrop = env.listBg === false ? "transparent" : plain ? cssColor({ name: "systemBackground" }, env.dark) : cssColor({ name: "systemGroupedBackground" }, env.dark);
+  const rowMod = <K extends Mod["m"]>(r: ViewNode, kind: K) => r.mods?.filter((m): m is Extract<Mod, { m: K }> => m.m === kind).pop();
+  const bare = (r: ViewNode | undefined) => !!r && rowMod(r, "rowSep")?.hidden === true;
   return (
-    <div className={`pv-list${plain ? " plain" : ""}`} style={{ background: plain ? cssColor({ name: "systemBackground" }, env.dark) : cssColor({ name: "systemGroupedBackground" }, env.dark) }}>
+    <div className={`pv-list${plain ? " plain" : ""}`} style={{ background: backdrop }}>
       {sections.map((s, i) => (
         <div key={i} className="pv-list-section">
           {(s.header?.props.header || s.header?.label?.length) && (
@@ -818,15 +1056,34 @@ function ListView({ node, env }: { node: ViewNode; env: RenderEnv }) {
               {s.header?.label?.length ? <Kids nodes={s.header.label} env={env} axis="x" /> : String(s.header?.props.header ?? "")}
             </div>
           )}
-          <div className="pv-list-card" style={{ background: plain ? "transparent" : cssColor({ name: "secondarySystemGroupedBackground" }, env.dark) }}>
-            {s.rows.map((r, j) => (
-              <Fragment key={r.id}>
-                {j > 0 && <div className="pv-sep" style={{ background: cssColor({ name: "separator" }, env.dark) }} />}
-                <div className="pv-row">
-                  <Node node={r} env={rowEnv} axis="x" />
-                </div>
-              </Fragment>
-            ))}
+          <div className="pv-list-card" style={{ background: s.rows.some((r) => rowMod(r, "rowBg")) ? "transparent" : card }}>
+            {s.rows.map((r, j) => {
+              const bg = rowMod(r, "rowBg");
+              const insets = rowMod(r, "rowInsets");
+              const style: CSSProperties = {};
+              if (bg) style.background = bg.view ? "transparent" : (color(bg.color, env) ?? card);
+              else if (s.rows.some((x) => rowMod(x, "rowBg"))) style.background = card;
+              if (bg?.view) {
+                style.position = "relative";
+                style.isolation = "isolate";
+              }
+              if (insets) style.padding = `${insets.top}px ${insets.trailing}px ${insets.bottom}px ${insets.leading}px`;
+              return (
+                <Fragment key={r.id}>
+                  {j > 0 && !bare(r) && !bare(s.rows[j - 1]) && <div className="pv-sep" style={{ background: cssColor({ name: "separator" }, env.dark) }} />}
+                  <div className="pv-row" style={style}>
+                    {bg?.view && (
+                      <div className="pv-zstack pv-under">
+                        {bg.view.map((v) => (
+                          <Node key={v.id} node={v} env={env} axis="z" />
+                        ))}
+                      </div>
+                    )}
+                    <Node node={r} env={rowEnv} axis="x" />
+                  </div>
+                </Fragment>
+              );
+            })}
           </div>
           {s.header?.props.footer ? (
             <div className="pv-list-footer" style={{ color: cssColor({ name: "secondary" }, env.dark) }}>
@@ -839,55 +1096,112 @@ function ListView({ node, env }: { node: ViewNode; env: RenderEnv }) {
   );
 }
 
-function findTitle(nodes: ViewNode[] | undefined): { title: string; mode?: string } | null {
+function pageMods<K extends Mod["m"]>(nodes: ViewNode[] | undefined, kind: K, out: Extract<Mod, { m: K }>[] = []): Extract<Mod, { m: K }>[] {
   for (const n of nodes ?? []) {
-    const m = n.mods?.find((x) => x.m === "navTitle") as Extract<Mod, { m: "navTitle" }> | undefined;
-    if (m) return { title: m.title, mode: m.mode };
-    if (n.type === "NavigationStack" || n.type === "TabView") continue;
-    const deep = findTitle([...(n.children ?? []), ...(n.label ?? [])]);
-    if (deep) return deep;
+    for (const m of n.mods ?? []) if (m.m === kind) out.push(m as Extract<Mod, { m: K }>);
+    if (n.type === "NavigationStack" || n.type === "TabView" || n.type === "SplitView") continue;
+    pageMods(n.type === "NavigationLink" ? n.label : [...(n.children ?? []), ...(n.label ?? [])], kind, out);
   }
-  return null;
+  return out;
 }
 
-function NavStack({ node, env }: { node: ViewNode; env: RenderEnv }) {
+function findTitle(nodes: ViewNode[] | undefined): { title: string; mode?: string } | null {
+  const m = pageMods(nodes, "navTitle")[0];
+  return m ? { title: m.title, mode: m.mode } : null;
+}
+
+type BarItem = Extract<Mod, { m: "toolbar" }>["items"][number];
+
+function BarItems({ items, env }: { items: BarItem[]; env: RenderEnv }) {
+  return (
+    <>
+      {items.map((item, i) =>
+        item.view.length === 1 && item.view[0].type === "Spacer" ? (
+          <span key={i} className="pv-bar-gap" />
+        ) : (
+          <div key={i} className={`pv-bar-item pv-glass${env.dark ? " dark" : ""}`}>
+            <Kids nodes={item.view} env={env} axis="x" />
+          </div>
+        ),
+      )}
+    </>
+  );
+}
+
+function NavStack({ node, env, edge }: { node: ViewNode; env: RenderEnv; edge: number }) {
   const [stack, setStack] = useState<{ nodes: ViewNode[]; title: string }[]>([]);
   const top = stack[stack.length - 1];
   const page = top ? top.nodes : (node.children ?? []);
   const title = findTitle(page);
   const pageEnv = useMemo<RenderEnv>(() => ({ ...env, push: (nodes, t) => setStack((s) => [...s, { nodes, title: t }]) }), [env]);
+  const barEnv = useMemo<RenderEnv>(() => ({ ...env, inList: false, buttonStyle: "plain" }), [env]);
+  const items = pageMods(page, "toolbar").flatMap((m) => m.items);
+  const leading = items.filter((i) => /[lL]eading|cancellation|^navigation$/.test(i.placement));
+  const bottom = items.filter((i) => /bottomBar|status/.test(i.placement));
+  const principal = items.filter((i) => i.placement === "principal");
+  const trailing = items.filter((i) => !leading.includes(i) && !bottom.includes(i) && !principal.includes(i) && i.placement !== "keyboard");
+  const search = pageMods(page, "search")[0];
   const inline = title?.mode === "inline" || !!top;
+  const showBar = inline || !!top || leading.length > 0 || trailing.length > 0 || principal.length > 0;
+  const large = !inline && !!title?.title;
+  const insets = { "--pv-nav-top": `${(showBar ? 44 : 0) + (large ? 51 : 0) + (search ? 46 : 0)}px`, "--pv-nav-bottom": bottom.length ? "52px" : "0px" } as CSSProperties;
   const previous = stack.length > 1 ? (findTitle(stack[stack.length - 2].nodes)?.title ?? stack[stack.length - 2].title) : (findTitle(node.children)?.title ?? "Back");
   return (
     <div className="pv-nav">
-      {(inline || top) && (
+      {showBar && (
         <div className="pv-navbar">
-          {top && (
-            <button className="pv-back" style={{ color: env.tint }} onClick={() => setStack((s) => s.slice(0, -1))}>
-              <Symbol name="chevron.left" style={{ fontSize: 20 }} />
-              <span>{previous}</span>
-            </button>
-          )}
-          <span className="pv-navbar-title">{title?.title ?? ""}</span>
+          <div className="pv-bar-side">
+            {top && (
+              <button className="pv-back" style={{ color: env.tint }} onClick={() => setStack((s) => s.slice(0, -1))}>
+                <Symbol name="chevron.left" style={{ fontSize: 20 }} />
+                <span>{previous}</span>
+              </button>
+            )}
+            <BarItems items={leading} env={barEnv} />
+          </div>
+          <div className="pv-bar-center">{principal.length ? <Kids nodes={principal.flatMap((i) => i.view)} env={barEnv} axis="x" /> : inline ? <span className="pv-navbar-title">{title?.title ?? ""}</span> : null}</div>
+          <div className="pv-bar-side end">
+            <BarItems items={trailing} env={barEnv} />
+          </div>
         </div>
       )}
-      <div className="pv-nav-content">
-        {!inline && title?.title ? <div className="pv-large-title">{title.title}</div> : null}
+      <div className="pv-nav-content" style={insets}>
+        {large ? <div className="pv-large-title">{title.title}</div> : null}
+        {search && (
+          <div className="pv-search" style={{ background: cssColor({ name: "systemFill" }, env.dark), color: cssColor({ name: "secondary" }, env.dark) }}>
+            <Symbol name="magnifyingglass" />
+            <span>{search.prompt}</span>
+          </div>
+        )}
         <div className="pv-nav-page">
-          <Kids nodes={page} env={pageEnv} axis="y" />
+          <Kids nodes={page} env={pageEnv} axis="y" edge={(edge & 2) | 1} />
         </div>
       </div>
+      {bottom.length > 0 && (
+        <div className="pv-bottombar">
+          <BarItems items={bottom} env={barEnv} />
+        </div>
+      )}
     </div>
   );
 }
 
-function TabsView({ node, env }: { node: ViewNode; env: RenderEnv }) {
+function TabsView({ node, env, edge }: { node: ViewNode; env: RenderEnv; edge: number }) {
   const [index, setIndex] = useState(0);
   const tabs = node.children ?? [];
   const current = tabs[Math.min(index, tabs.length - 1)];
+  const accessory = node.mods?.find((m) => m.m === "accessory") as Extract<Mod, { m: "accessory" }> | undefined;
+  const shown = useMemo(() => (current ? { ...current, mods: current.mods?.filter((m) => m.m !== "tabItem") } : null), [current]);
   return (
     <div className="pv-tabs">
-      <div className="pv-tab-content">{current ? <Node node={{ ...current, mods: current.mods?.filter((m) => m.m !== "tabItem") }} env={env} axis="y" /> : null}</div>
+      <div className="pv-tab-content" style={{ paddingBottom: accessory ? 126 : 70, "--pv-tab-bottom": accessory ? "126px" : "70px" } as CSSProperties}>
+        {shown ? <Node node={shown} env={env} axis="y" edge={expands(shown).y ? (edge & 1) | 2 : 0} /> : null}
+      </div>
+      {accessory && (
+        <div className={`pv-accessory pv-glass${env.dark ? " dark" : ""}`}>
+          <Kids nodes={accessory.view} env={env} axis="x" />
+        </div>
+      )}
       <div className="pv-tabbar" style={{ background: env.dark ? "rgba(30,30,32,0.78)" : "rgba(250,250,252,0.82)" }}>
         {tabs.map((t, i) => {
           const item = t.mods?.find((m) => m.m === "tabItem") as Extract<Mod, { m: "tabItem" }> | undefined;

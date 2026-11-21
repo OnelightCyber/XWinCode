@@ -1,24 +1,43 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, CircleX, Smartphone, TriangleAlert, X } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleX, Columns2, FileDiff, Smartphone, TriangleAlert, X } from "lucide-react";
 import { keys, t } from "../i18n";
 import { editorFontFamily } from "../lib/fonts";
+import { originalText, touchGitMarks } from "../lib/git";
 import { openExternal } from "../lib/links";
 import { lspStatus, onLspStatus, startLsp, type LspStatus } from "../lib/lsp";
 import { monaco } from "../lib/monaco";
 import { allDocs, getDoc, isDirty, setModelOptions } from "../lib/models";
-import { basename, relative, samePath } from "../lib/paths";
+import { basename, dirname, isImagePath, relative, samePath } from "../lib/paths";
 import { useStore } from "../lib/store";
 import { breakpointsFor, currentLocation, setBreakpointsFor, toggleBreakpoint, useDebug } from "../lib/debugger";
 import { KIND_BADGE, symbolAt, symbolsFor, type Sym } from "../lib/symbols";
 import type { Diagnostic } from "../lib/types";
 import { AppGlyph } from "./AppGlyph";
 import { FileIcon } from "./FileIcon";
+import { ImageView } from "./ImageView";
 import { useMenu, type MenuEntry } from "./Menu";
 import { Resizer, usePanelSize } from "./Resizer";
 
 const Canvas = lazy(() => import("./canvas/Canvas"));
 
 const decorationIds = new WeakMap<monaco.editor.ITextModel, string[]>();
+
+type EditorOptions = monaco.editor.IEditorOptions & monaco.editor.IGlobalEditorOptions;
+
+const BASE_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
+  model: null,
+  automaticLayout: true,
+  scrollBeyondLastLine: true,
+  smoothScrolling: true,
+  cursorBlinking: "smooth",
+  renderLineHighlight: "all",
+  roundedSelection: true,
+  padding: { top: 10, bottom: 10 },
+  bracketPairColorization: { enabled: false },
+  scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
+  overviewRulerLanes: 2,
+  fixedOverflowWidgets: true,
+};
 
 monaco.editor.registerLinkOpener({
   open(resource) {
@@ -270,7 +289,7 @@ function JumpBar() {
           </span>
         );
       })}
-      <SymbolCrumb active={active} />
+      {!isImagePath(active) && <SymbolCrumb active={active} />}
       <span className="grow" />
       {e > 0 && (
         <span className="badge err">
@@ -285,6 +304,8 @@ function JumpBar() {
         </span>
       )}
       <LspChip />
+      <CompareToggle active={active} />
+      <SplitToggle />
       {project.kind === "iosApp" && active.toLowerCase().endsWith(".swift") && <CanvasToggle />}
     </div>
   );
@@ -296,6 +317,98 @@ function CanvasToggle() {
     <button className={`icon-btn canvas-toggle${open ? " on" : ""}`} title={`${t("cmd.canvas")} (${keys("Ctrl+Alt+Enter")})`} onClick={() => useStore.getState().toggleCanvas()}>
       <Smartphone size={14} />
     </button>
+  );
+}
+
+function CompareToggle({ active }: { active: string }) {
+  const tracked = useStore((s) => !!s.git?.head && s.git.files.some((f) => samePath(f.path, active) && (f.status === "modified" || f.status === "renamed" || f.status === "conflict")));
+  const on = useStore((s) => !!s.compare && samePath(s.compare, active));
+  if (!tracked && !on) return null;
+  return (
+    <button className={`icon-btn compare-toggle${on ? " on" : ""}`} title={on ? t("git.hideDiff") : t("git.showDiff")} onClick={() => useStore.getState().setCompare(on ? null : active)}>
+      <FileDiff size={14} />
+    </button>
+  );
+}
+
+function SplitToggle() {
+  const on = useStore((s) => !!s.side);
+  return (
+    <button
+      className={`icon-btn split-toggle${on ? " on" : ""}`}
+      title={`${on ? t("editor.closeSplit") : t("cmd.splitEditor")} (${keys("Ctrl+\\")})`}
+      onClick={() => (on ? useStore.getState().closeBeside() : void useStore.getState().openBeside())}
+    >
+      <Columns2 size={14} />
+    </button>
+  );
+}
+
+function SidePane({ path, options, share }: { path: string; options: EditorOptions; share: number }) {
+  const project = useStore((s) => s.project);
+  const host = useRef<HTMLDivElement>(null);
+  const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const shown = useRef(path);
+  shown.current = path;
+  const image = isImagePath(path);
+  useStore((s) => s.dirtyTick);
+
+  useEffect(() => {
+    if (!host.current) return;
+    const ed = monaco.editor.create(host.current, { ...BASE_OPTIONS, glyphMargin: false, ...options });
+    editor.current = ed;
+    let dirtyTimer = 0;
+    let saveTimer = 0;
+    const onEdit = ed.onDidChangeModelContent(() => {
+      const target = shown.current;
+      window.clearTimeout(dirtyTimer);
+      dirtyTimer = window.setTimeout(() => useStore.getState().touchDirty(), 60);
+      touchGitMarks(target);
+      const st = useStore.getState();
+      if (st.settings?.autoSave) {
+        window.clearTimeout(saveTimer);
+        saveTimer = window.setTimeout(() => void st.save(target), 1200);
+      }
+    });
+    const onFocus = ed.onDidFocusEditorText(() => useStore.getState().setSideFocus(true));
+    const onBlur = ed.onDidBlurEditorText(() => useStore.getState().setSideFocus(false));
+    return () => {
+      window.clearTimeout(dirtyTimer);
+      onEdit.dispose();
+      onFocus.dispose();
+      onBlur.dispose();
+      ed.dispose();
+      editor.current = null;
+      useStore.getState().setSideFocus(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    editor.current?.updateOptions(options);
+  }, [options]);
+
+  useEffect(() => {
+    editor.current?.setModel(image ? null : (getDoc(path)?.model ?? null));
+  }, [path, image]);
+
+  const dir = project ? dirname(relative(project.root, path)) : "";
+  return (
+    <div className="split-pane" style={{ flex: `${share} 1 0` }}>
+      <div className="split-head">
+        <FileIcon path={path} size={13} />
+        <span className="ellipsis">{basename(path)}</span>
+        {isDirty(path) && <span className="dirty-dot" />}
+        {dir && dir !== "." && <span className="faint ellipsis split-dir">{dir}</span>}
+        <span className="grow" />
+        <button className="icon-btn" title={`${t("editor.closeSplit")} (${keys("Ctrl+\\")})`} onClick={() => useStore.getState().closeBeside()}>
+          <X size={13} />
+        </button>
+      </div>
+      <div className="split-host">
+        <div ref={host} style={{ position: "absolute", inset: 0, visibility: image ? "hidden" : "visible" }} />
+        {image && <ImageView path={path} />}
+      </div>
+    </div>
   );
 }
 
@@ -341,9 +454,15 @@ function EmptyEditor() {
 
 export function EditorArea() {
   const host = useRef<HTMLDivElement>(null);
+  const diffHost = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const diff = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const current = useRef<string | null>(null);
   const active = useStore((s) => s.active);
+  const compare = useStore((s) => s.compare);
+  const head = useStore((s) => s.git?.head ?? null);
+  const comparing = !!compare && !!active && samePath(compare, active);
+  const image = !!active && isImagePath(active);
   const reveal = useStore((s) => s.reveal);
   const diagnostics = useStore((s) => s.diagnostics);
   const settings = useStore((s) => s.settings);
@@ -352,9 +471,33 @@ export function EditorArea() {
   const iosProject = useStore((s) => s.project?.kind === "iosApp");
   const showCanvas = canvasOpen && iosProject && !!active && active.toLowerCase().endsWith(".swift");
   const canvasSize = usePanelSize("canvas", 460, 320, 960);
+  const side = useStore((s) => s.side);
+  const [share, setShare] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem("xwc.split.share"));
+      return saved >= 0.2 && saved <= 0.8 ? saved : 0.5;
+    } catch {
+      return 0.5;
+    }
+  });
+  const shareBase = useRef<number | null>(null);
+  const resizeSplit = (delta: number) => {
+    const main = host.current?.parentElement;
+    const beside = main?.parentElement?.querySelector<HTMLElement>(".split-pane");
+    if (!main || !beside) return;
+    shareBase.current ??= share;
+    const total = main.clientWidth + beside.clientWidth;
+    if (total > 0) setShare(Math.max(0.2, Math.min(0.8, shareBase.current - delta / total)));
+  };
+  const endSplit = () => {
+    shareBase.current = null;
+    try {
+      localStorage.setItem("xwc.split.share", String(share));
+    } catch {}
+  };
 
   const fontSize = settings?.editorFontSize ?? 13;
-  const options = useMemo<monaco.editor.IEditorOptions & monaco.editor.IGlobalEditorOptions>(
+  const options = useMemo<EditorOptions>(
     () => ({
       fontFamily: editorFontFamily(settings?.editorFont),
       fontSize,
@@ -375,22 +518,7 @@ export function EditorArea() {
 
   useEffect(() => {
     if (!host.current) return;
-    const ed = monaco.editor.create(host.current, {
-      model: null,
-      automaticLayout: true,
-      glyphMargin: true,
-      scrollBeyondLastLine: true,
-      smoothScrolling: true,
-      cursorBlinking: "smooth",
-      renderLineHighlight: "all",
-      roundedSelection: true,
-      padding: { top: 10, bottom: 10 },
-      bracketPairColorization: { enabled: false },
-      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
-      overviewRulerLanes: 2,
-      fixedOverflowWidgets: true,
-      ...options,
-    });
+    const ed = monaco.editor.create(host.current, { ...BASE_OPTIONS, glyphMargin: true, ...options });
     editor.current = ed;
     void document.fonts.ready.then(() => monaco.editor.remeasureFonts());
 
@@ -399,6 +527,7 @@ export function EditorArea() {
     const sub1 = ed.onDidChangeModelContent(() => {
       window.clearTimeout(dirtyTimer);
       dirtyTimer = window.setTimeout(() => useStore.getState().touchDirty(), 60);
+      if (current.current) touchGitMarks(current.current);
       const st = useStore.getState();
       if (st.settings?.autoSave) {
         window.clearTimeout(saveTimer);
@@ -426,11 +555,50 @@ export function EditorArea() {
       sub2.dispose();
       ed.dispose();
       editor.current = null;
+      diff.current?.dispose();
+      diff.current = null;
     };
   }, []);
 
   useEffect(() => {
+    if (!comparing || !active || !diffHost.current) return;
+    const doc = getDoc(active);
+    if (!doc) return;
+    let cancelled = false;
+    let original: monaco.editor.ITextModel | null = null;
+    void originalText(active).then((text) => {
+      if (cancelled || !diffHost.current || doc.model.isDisposed()) return;
+      original = monaco.editor.createModel(text ?? "", doc.model.getLanguageId());
+      diff.current ??= monaco.editor.createDiffEditor(diffHost.current, {
+        automaticLayout: true,
+        originalEditable: false,
+        renderSideBySide: true,
+        useInlineViewWhenSpaceIsLimited: true,
+        renderSideBySideInlineBreakpoint: 760,
+        renderMarginRevertIcon: true,
+        ignoreTrimWhitespace: false,
+        scrollBeyondLastLine: false,
+        smoothScrolling: true,
+        padding: { top: 10, bottom: 10 },
+        scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
+        fixedOverflowWidgets: true,
+        ...options,
+        minimap: { enabled: false },
+        stickyScroll: { enabled: false },
+      });
+      diff.current.setModel({ original, modified: doc.model });
+      diff.current.getModifiedEditor().focus();
+    });
+    return () => {
+      cancelled = true;
+      diff.current?.setModel(null);
+      original?.dispose();
+    };
+  }, [comparing, active, head]);
+
+  useEffect(() => {
     editor.current?.updateOptions(options);
+    diff.current?.updateOptions({ ...options, minimap: { enabled: false }, stickyScroll: { enabled: false } });
     setModelOptions({ tabSize: options.tabSize, insertSpaces: options.insertSpaces });
     void document.fonts.load(`${options.fontSize}px ${options.fontFamily}`).then(() => monaco.editor.remeasureFonts());
   }, [options]);
@@ -539,10 +707,18 @@ export function EditorArea() {
       {hasTabs && <TabBar />}
       {hasTabs && <JumpBar />}
       <div className="editor-split">
-        <div className="editor-host">
-          <div ref={host} style={{ position: "absolute", inset: 0, visibility: active ? "visible" : "hidden" }} />
+        <div className="editor-host" style={side ? { flex: `${1 - share} 1 0` } : undefined}>
+          <div ref={host} style={{ position: "absolute", inset: 0, visibility: active && !comparing && !image ? "visible" : "hidden", opacity: comparing || image ? 0 : 1 }} />
+          <div ref={diffHost} className="diff-host" style={{ display: comparing ? "block" : "none" }} />
+          {image && active && <ImageView path={active} />}
           {!active && <EmptyEditor />}
         </div>
+        {side && (
+          <>
+            <Resizer axis="x" onDrag={resizeSplit} onEnd={endSplit} />
+            <SidePane path={side} options={options} share={share} />
+          </>
+        )}
         {showCanvas && active && (
           <>
             <Resizer axis="x" onDrag={(d) => canvasSize.drag(-d)} onEnd={canvasSize.end} />

@@ -1,3 +1,4 @@
+import { APP_VERSION } from "./format";
 import { t } from "../i18n";
 import { monaco } from "./monaco";
 import { api, errorMessage, isTauri, on } from "./ipc";
@@ -68,6 +69,12 @@ function normalizeIncomingUri(u: string): string {
   }
 }
 
+function hasModel(uri: unknown): boolean {
+  if (typeof uri !== "string") return false;
+  const wanted = uri.toLowerCase();
+  return monaco.editor.getModels().some((model) => model.uri.toString(true).toLowerCase() === wanted);
+}
+
 function mapUris(v: any, f: (s: string) => string, key?: string): any {
   if (typeof v === "string") return v.startsWith("file:") && !(key && TEXT_KEYS.has(key)) ? f(v) : v;
   if (Array.isArray(v)) return v.map((x) => mapUris(x, f, key));
@@ -89,6 +96,7 @@ class TauriTransport {
   private methods = new Map<string | number, string>();
   private pending = new Map<string, (m: Msg) => void>();
   private nextRequest = 1;
+  private epoch = 0;
   private ready: Promise<void> = Promise.resolve();
   private resolveReady: (() => void) | null = null;
   root: string;
@@ -151,13 +159,15 @@ class TauriTransport {
       msg.params = {
         ...msg.params,
         processId: null,
-        clientInfo: { name: "XWinCode", version: "0.1.0" },
+        clientInfo: { name: "XWinCode", version: APP_VERSION },
         rootUri: rootUri(this.root),
         workspaceFolders: [{ uri: rootUri(this.root), name: "workspace" }],
       };
       this.initParams = msg.params;
     } else {
+      const epoch = this.epoch;
       await this.ready;
+      if (epoch !== this.epoch && msg.method === "textDocument/didChange") return;
     }
     const docUri: string | undefined = msg.params?.textDocument?.uri;
     if (docUri && !SUPPORTED.test(docUri)) {
@@ -207,7 +217,9 @@ class TauriTransport {
         m = { jsonrpc: "2.0", id: m.id, result: null };
       }
     }
-    this.dispatch(mapUris(m, normalizeIncomingUri));
+    const incoming = mapUris(m, normalizeIncomingUri) as Msg;
+    if (incoming.method === "textDocument/publishDiagnostics" && !hasModel(incoming.params?.uri)) return;
+    this.dispatch(incoming);
   }
 
   hold() {
@@ -221,6 +233,7 @@ class TauriTransport {
 
   restart(root: string) {
     this.root = root;
+    this.epoch++;
     this.hold();
     this.opened.clear();
     const params = { ...this.initParams, rootUri: rootUri(root), workspaceFolders: [{ uri: rootUri(root), name: "workspace" }] };

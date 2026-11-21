@@ -123,7 +123,7 @@ pub fn pty_open(
     Ok(PtyInfo { id, title })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_write(state: State<'_, PtyState>, id: u32, data: String) -> Result<(), String> {
     let mut sessions = state.sessions.lock().unwrap();
     let s = sessions.get_mut(&id).ok_or_else(|| t!("err.terminalClosed"))?;
@@ -131,7 +131,7 @@ pub fn pty_write(state: State<'_, PtyState>, id: u32, data: String) -> Result<()
     s.writer.flush().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_resize(state: State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
     let s = sessions.get(&id).ok_or_else(|| t!("err.terminalClosed"))?;
@@ -145,7 +145,7 @@ pub fn shutdown(app: &AppHandle) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_kill(state: State<'_, PtyState>, id: u32) -> Result<(), String> {
     if let Some(mut s) = state.sessions.lock().unwrap().remove(&id) {
         let _ = s.child.kill();

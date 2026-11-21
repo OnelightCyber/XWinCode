@@ -1,3 +1,4 @@
+import { version as packageVersion } from "../../package.json";
 import { useEffect, useState } from "react";
 import { locale, t } from "../i18n";
 import { isTauri } from "./ipc";
@@ -42,8 +43,10 @@ export function prettyPath(path: string): string {
 
 let cachedVersion: string | null = null;
 
+export const APP_VERSION: string = packageVersion;
+
 export function useAppVersion(): string {
-  const [version, setVersion] = useState(cachedVersion ?? "0.1.0");
+  const [version, setVersion] = useState(cachedVersion ?? APP_VERSION);
   useEffect(() => {
     if (cachedVersion || !isTauri) return;
     void import("@tauri-apps/api/app")

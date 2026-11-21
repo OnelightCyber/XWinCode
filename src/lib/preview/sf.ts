@@ -1,3 +1,4 @@
+import * as lucide from "lucide-react";
 import { icons, type LucideIcon } from "lucide-react";
 
 const TABLE: Record<string, string> = {
@@ -412,12 +413,90 @@ const TABLE: Record<string, string> = {
   "lanyardcard": "IdCard",
   "person.text.rectangle": "IdCard",
   "accessibility": "Accessibility",
+  "arrow.uturn.left": "Undo2",
+  "tray.full": "Inbox",
+  "backward": "Rewind",
+  "backward.end": "SkipBack",
+  "airpods.pro": "Headphones",
+  "airpodspro": "Headphones",
+  "airpods.gen3": "Headphones",
+  "rectangle.grid.1x2": "Rows2",
+  "chart.bar.xaxis": "ChartColumn",
+  "chart.bar.doc.horizontal": "FileChartColumn",
+  "waveform.path": "AudioWaveform",
+  "waveform.path.ecg.rectangle": "SquareActivity",
+  "figure.stand": "PersonStanding",
+  "figure.hiking": "MountainSnow",
+  "figure.outdoor.cycle": "Bike",
+  "figure.strengthtraining.traditional": "Dumbbell",
+  "figure.mind.and.body": "Flower2",
+  "figure.pool.swim": "WavesLadder",
+  "figure.mixed.cardio": "HeartPulse",
+  "figure.wave": "Hand",
+  "fuelpump": "Fuel",
+  "capsule": "Pill",
+  "rectangle": "RectangleHorizontal",
+  "restart": "RotateCcw",
+  "return": "CornerDownLeft",
+  "shift": "ArrowBigUp",
+  "character": "Type",
+  "plusminus": "Diff",
+  "zzz": "Moon",
+  "lines.measurement.horizontal": "Ruler",
+  "level": "Ruler",
+  "iphone.radiowaves.left.and.right": "Vibrate",
+  "wave.3.right": "Nfc",
+  "sensor": "Radar",
+  "tray.and.arrow.down": "Download",
+  "tray.and.arrow.up": "Upload",
+  "icloud.and.arrow.down": "CloudDownload",
+  "icloud.and.arrow.up": "CloudUpload",
+  "person.badge.shield.checkmark": "ShieldUser",
+  "personalhotspot": "Radio",
+  "esim": "MemoryStick",
+  "rectangle.portrait.and.arrow.forward": "LogOut",
+  "point.topleft.down.to.point.bottomright.curvepath": "Route",
+  "note.text": "NotebookText",
+  "text.bubble": "MessageSquareText",
+  "hifispeaker": "Speaker",
+  "tuningfork": "Music",
+  "guitars": "Guitar",
+  "pianokeys": "Piano",
+  "dice": "Dices",
+  "location.north.line": "Navigation",
+  "safari": "Compass",
+  "square.split.2x1": "Columns2",
+  "sidebar.left": "PanelLeft",
+  "rectangle.split.3x1": "Columns3",
+  "arrow.up.left.and.arrow.down.right": "Maximize2",
+  "arrow.down.right.and.arrow.up.left": "Minimize2",
+  "character.cursor.ibeam": "TextCursor",
+  "doc.text.magnifyingglass": "FileSearch",
+  "doc.badge.plus": "FilePlus",
+  "doc.badge.arrow.up": "FileUp",
+  "externaldrive.badge.plus": "HardDrive",
+  "square.and.arrow.up.on.square": "Share",
+  "arrowshape.turn.up.right": "Forward",
+  "arrowshape.turn.up.left": "Reply",
+  "eyedropper": "Pipette",
+  "swatchpalette": "SwatchBook",
+  "tablecells": "Table",
+  "hearingdevice.ear": "Ear",
+  "hare": "Rabbit",
+  "tortoise": "Turtle",
+  "curlybraces": "Braces",
+  "arrow.up.heart": "HeartPlus",
+  "arrow.down.heart": "HeartMinus",
+  "arrow.up.and.down": "ArrowUpDown",
+  "arrow.triangle.2.circlepath.camera": "SwitchCamera",
 };
 
 const resolved = new Map<string, { icon: LucideIcon; fill: boolean }>();
 
 function find(name: string): LucideIcon | undefined {
-  return (icons as Record<string, LucideIcon>)[name];
+  if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) return undefined;
+  const hit = (icons as Record<string, LucideIcon>)[name] ?? (lucide as unknown as Record<string, unknown>)[name];
+  return hit && typeof hit === "object" ? (hit as LucideIcon) : undefined;
 }
 
 const pascal = (parts: string[]) => parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("");
@@ -434,7 +513,7 @@ export function sfSymbol(name: string): { icon: LucideIcon; fill: boolean } {
       const parts = bare.split(".");
       const shape = parts.length > 1 && ["circle", "square"].includes(parts[parts.length - 1]) ? parts.pop()! : null;
       const base = TABLE[parts.join(".")] ?? pascal(parts);
-      icon = (shape ? find(pascal([shape]) + base) : undefined) ?? find(base) ?? find(pascal(parts.slice(0, 1)));
+      icon = (shape ? find(pascal([shape]) + base) : undefined) ?? find(base) ?? find(pascal(parts.slice(0, 1))) ?? (shape ? find(pascal([shape])) : undefined);
     }
   }
   const out = { icon: icon ?? find("Square")!, fill };

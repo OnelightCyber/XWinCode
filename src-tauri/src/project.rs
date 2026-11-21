@@ -5,6 +5,18 @@ use tauri::{AppHandle, Manager};
 
 use crate::settings::{self, RecentProject};
 
+pub const GITIGNORE: &str = "\
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+/xtool
+";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ProjectKind {
@@ -72,18 +84,7 @@ fn swift_text(s: &str) -> String {
 fn template_files(template: &str, name: &str, org: &str) -> Result<Vec<(String, String)>, String> {
     let module = name.replace('-', "_");
     let library_comment = t!("tpl.ios.libraryComment");
-    let gitignore = "\
-.DS_Store
-/.build
-/Packages
-xcuserdata/
-DerivedData/
-.swiftpm/configuration/registries.json
-.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
-.netrc
-/xtool
-"
-    .to_string();
+    let gitignore = GITIGNORE.to_string();
 
     let files = match template {
         "iosApp" => vec![

@@ -78,6 +78,19 @@ export interface SearchHit {
   text: string;
 }
 
+export interface SearchOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+}
+
+export interface ProjectSymbol {
+  name: string;
+  kind: string;
+  path: string;
+  line: number;
+}
+
 export interface Diagnostic {
   file: string | null;
   line: number;
@@ -158,6 +171,42 @@ export interface InstallRecord {
   expiresAt: string | null;
 }
 
+export type GitFileStatus = "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflict";
+
+export interface GitFile {
+  path: string;
+  status: GitFileStatus;
+  staged: boolean;
+  unstaged: boolean;
+  origin: string | null;
+}
+
+export interface GitStatus {
+  available: boolean;
+  locked: boolean;
+  repo: boolean;
+  head: string | null;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  files: GitFile[];
+}
+
+export interface GitBranch {
+  name: string;
+  current: boolean;
+  remote: boolean;
+}
+
+export interface GitCommit {
+  hash: string;
+  short: string;
+  subject: string;
+  author: string;
+  time: number;
+}
+
 export interface ProjectConfig {
   bundleId: string;
   displayName: string;
@@ -165,6 +214,14 @@ export interface ProjectConfig {
   build: string;
   permissions: Record<string, string>;
   icon?: string | null;
+  minIos: string | null;
+  devices: "iphone" | "ipad" | "universal" | null;
+  orientations: string[] | null;
+  appearance: "automatic" | "light" | "dark" | null;
+  backgroundModes: string[];
+  capabilities: string[];
+  appGroups: string[];
+  associatedDomains: string[];
 }
 
 export interface DeviceLine {

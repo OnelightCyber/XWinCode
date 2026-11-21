@@ -1,4 +1,5 @@
-import type { AnimCurve, ColorSpec, FontSpec, Length, Mod, ShapeSpec, TextStyle, ViewNode, Weight } from "./types";
+import type { AnimCurve, ColorSpec, FontSpec, GradientSpec, Length, Mod, ShapeSpec, TextStyle, ViewNode, Weight } from "./types";
+import { pointOf, radians } from "./geometry";
 
 type Rgba = [number, number, number, number];
 let assetColors: Record<string, { light: Rgba; dark?: Rgba }> = {};
@@ -18,7 +19,7 @@ export function animCurve(v: V | undefined): AnimCurve | null {
   }
   return { kind: "default" };
 }
-import { Dbl, describe, isNum, isT, jsonOf, nodesOf, num, type EvArg, type V } from "./values";
+import { Dbl, describe, isNum, isT, jsonOf, nodesOf, num, rangeEnd, type EvArg, type V } from "./values";
 
 export type Handler =
   | { kind: "tap"; run: () => void }
@@ -30,7 +31,9 @@ export interface Ctx {
   build(fn: V | undefined, args?: V[]): ViewNode[];
   scheme: "light" | "dark";
   size: { width: number; height: number };
+  wide: boolean;
   note(feature: string): void;
+  format(v: V, style: V | undefined): string;
 }
 
 export const HANDLER = Symbol("handler");
@@ -152,18 +155,82 @@ export function arg(args: EvArg[], label: string | null, index = 0): V | undefin
   return args.filter((a) => a.label === null)[index]?.value;
 }
 
+const UNIT_POINTS: Record<string, [number, number]> = {
+  top: [0.5, 0],
+  bottom: [0.5, 1],
+  leading: [0, 0.5],
+  trailing: [1, 0.5],
+  center: [0.5, 0.5],
+  topLeading: [0, 0],
+  topTrailing: [1, 0],
+  bottomLeading: [0, 1],
+  bottomTrailing: [1, 1],
+  zero: [0, 0],
+};
+
+function unitPoint(v: V | undefined): [number, number] | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (isT(v, "sym")) {
+    if (UNIT_POINTS[v.name]) return UNIT_POINTS[v.name];
+    if (v.args?.length) return [num(v.args.find((a) => a.label === "x")?.value ?? 0), num(v.args.find((a) => a.label === "y")?.value ?? 0)];
+    return undefined;
+  }
+  if (isT(v, "tuple")) {
+    const p = pointOf(v);
+    return [p.x, p.y];
+  }
+  return undefined;
+}
+
+export function gradientOf(name: string, args: EvArg[], scheme: "light" | "dark"): ColorSpec | null {
+  const kind = /^(linear|Linear)/.test(name) ? "linear" : /^(radial|Radial|elliptical|Elliptical)/.test(name) ? "radial" : /^(angular|Angular|conic)/.test(name) ? "angular" : "linear";
+  const pick = (l: string) => args.find((a) => a.label === l)?.value;
+  let source = pick("colors") ?? pick("stops") ?? pick("gradient") ?? args.find((a) => a.label === null)?.value;
+  if (source !== undefined && isT(source, "sym") && source.args) source = source.args.find((a) => a.label === "colors" || a.label === "stops")?.value ?? source.args[0]?.value;
+  if (!Array.isArray(source)) return null;
+  const stops: { color: ColorSpec; at?: number }[] = [];
+  for (const item of source) {
+    const parts = isT(item, "sym") && item.args?.some((a) => a.label === "color") ? item.args : isT(item, "tuple") && item.labels.includes("color") ? item.items.map((value, i) => ({ label: item.labels[i], value })) : null;
+    const color = toColor(parts ? parts.find((a) => a.label === "color")?.value : item, scheme);
+    if (!color) continue;
+    const location = parts?.find((a) => a.label === "location")?.value;
+    stops.push(location === undefined ? { color } : { color, at: Math.min(1, Math.max(0, num(location))) });
+  }
+  if (!stops.length) return null;
+  const gradient: GradientSpec = { kind, stops };
+  if (kind === "linear") {
+    gradient.from = unitPoint(pick("startPoint")) ?? [0.5, 0];
+    gradient.to = unitPoint(pick("endPoint")) ?? [0.5, 1];
+  } else {
+    gradient.center = unitPoint(pick("center")) ?? [0.5, 0.5];
+    if (kind === "radial") {
+      gradient.r0 = num(pick("startRadius") ?? 0);
+      const end = pick("endRadius");
+      if (end !== undefined) gradient.r1 = num(end);
+    } else {
+      const start = pick("startAngle") ?? pick("angle");
+      const end = pick("endAngle");
+      if (start !== undefined) gradient.a0 = (radians(start) * 180) / Math.PI;
+      if (end !== undefined) gradient.a1 = (radians(end) * 180) / Math.PI;
+    }
+  }
+  const { gradient: _, ...head } = stops[0].color;
+  return { ...head, gradient } as ColorSpec;
+}
+
 export function toColor(v: V | undefined, scheme: "light" | "dark"): ColorSpec | null {
   if (v === undefined || v === null) return null;
   if (isT(v, "color")) return v.spec;
   if (isT(v, "sym")) {
-    if (v.name === "opacity" || v.name === "gradient") return null;
+    if (v.name === "opacity") return null;
+    if (/[gG]radient$/.test(v.name)) return gradientOf(v.name, v.args ?? [], scheme);
     return namedColor(v.name, scheme);
   }
+  if (Array.isArray(v)) return v.length ? toColor(v[0], scheme) : null;
   const nodes = nodesOf(v);
   if (nodes?.length === 1) {
     const n = nodes[0];
     if (n.type === "Color") return n.props.color as ColorSpec;
-    if (n.type.endsWith("Gradient")) return (n.props.colors as ColorSpec[] | undefined)?.[0] ?? null;
   }
   return null;
 }
@@ -359,7 +426,7 @@ function bindingOf(v: V | undefined): Extract<V, { t: "binding" }> | null {
 
 function rangeOf(v: V | undefined): { min: number; max: number } | null {
   if (v === undefined || v === null) return null;
-  if (isT(v, "range")) return { min: v.lo, max: v.hi - 1 };
+  if (isT(v, "range")) return { min: v.lo, max: v.closed ? v.hi : v.hi - 1 };
   if (isT(v, "tuple") && v.items.length === 2) return { min: num(v.items[0]), max: num(v.items[1]) };
   if (Array.isArray(v) && v.length === 2) return { min: num(v[0]), max: num(v[1]) };
   return null;
@@ -367,25 +434,50 @@ function rangeOf(v: V | undefined): { min: number; max: number } | null {
 
 const SHAPES = new Set(["Rectangle", "RoundedRectangle", "Circle", "Capsule", "Ellipse", "UnevenRoundedRectangle", "ContainerRelativeShape"]);
 
-const PASSTHROUGH = new Set(["Group", "AnyView", "ViewThatFits", "VStackLayout", "HStackLayout"]);
+const PASSTHROUGH = new Set(["Group", "AnyView", "ViewThatFits", "VStackLayout", "HStackLayout", "ZStackLayout", "GlassEffectContainer", "TabSection", "EquatableView", "PhaseAnimator", "KeyframeAnimator"]);
 
-const UNSUPPORTED = new Set([
-  "Map",
-  "Chart",
-  "Canvas",
-  "VideoPlayer",
-  "WebView",
-  "SceneView",
-  "SpriteView",
-  "RealityView",
-  "Model3D",
-  "PhotosPicker",
-  "CameraView",
-  "SignInWithAppleButton",
-  "PasteButton",
-  "Gauge",
-  "MultiDatePicker",
-]);
+const UNSUPPORTED: Record<string, string> = {
+  Map: "map",
+  MapReader: "map",
+  VideoPlayer: "video",
+  WebView: "web",
+  SceneView: "model",
+  SpriteView: "model",
+  RealityView: "model",
+  Model3D: "model",
+  PhotosPicker: "picker",
+  CameraView: "camera",
+  SignInWithAppleButton: "button",
+  PasteButton: "button",
+  MultiDatePicker: "picker",
+  Table: "table",
+  StoreView: "store",
+  SubscriptionStoreView: "store",
+  ProductView: "store",
+};
+
+const MARKS = new Set(["BarMark", "LineMark", "AreaMark", "PointMark", "RuleMark", "RectangleMark", "SectorMark"]);
+
+function plot(v: V | undefined): { label: string; kind: "n" | "s" | "d"; v: number | string } | undefined {
+  if (v === undefined || v === null) return undefined;
+  let label = "";
+  let value: V = v;
+  if (isT(v, "sym") && v.name === "value" && v.args?.length) {
+    label = describe(v.args[0].value);
+    value = v.args[1]?.value ?? null;
+  }
+  if (value === null) return undefined;
+  if (isNum(value)) return { label, kind: "n", v: num(value) };
+  if (isT(value, "date")) return { label, kind: "d", v: value.ms };
+  return { label, kind: "s", v: describe(value) };
+}
+
+function extent(v: V | undefined): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (isNum(v)) return num(v);
+  if (isT(v, "sym") && v.args?.length && isNum(v.args[0].value)) return v.name === "ratio" ? -num(v.args[0].value) : num(v.args[0].value);
+  return undefined;
+}
 
 export function isViewName(name: string): boolean {
   return VIEW_NAMES.has(name);
@@ -442,9 +534,17 @@ const VIEW_NAMES = new Set([
   "GroupBox",
   "LabeledContent",
   "ScrollViewReader",
+  "ToolbarItem",
+  "ToolbarItemGroup",
+  "ToolbarSpacer",
+  "Chart",
+  "Gauge",
+  "EditButton",
+  "RenameButton",
+  ...MARKS,
   ...SHAPES,
   ...PASSTHROUGH,
-  ...UNSUPPORTED,
+  ...Object.keys(UNSUPPORTED),
 ]);
 
 export function makeView(name: string, args: EvArg[], trailing: V[], ctx: Ctx): ViewNode[] | null {
@@ -452,13 +552,32 @@ export function makeView(name: string, args: EvArg[], trailing: V[], ctx: Ctx): 
   const content = () => ctx.build(trailing[0] ?? arg(args, "content"));
   const labeled = (label: string) => args.find((a) => a.label === label)?.value;
   if (PASSTHROUGH.has(name)) {
-    if (name === "AnyView") return nodesOf(first ?? null) ?? [];
+    if (name === "AnyView" || name === "EquatableView") return nodesOf(first ?? labeled("content") ?? null) ?? content();
     if (name === "ViewThatFits") return content().slice(0, 1);
+    if (name === "PhaseAnimator" || name === "KeyframeAnimator") {
+      const phases = Array.isArray(first) ? first : [];
+      const start = labeled("initialValue") ?? phases[0] ?? null;
+      return [node("Group", {}, { children: ctx.build(trailing[0] ?? labeled("content"), name === "PhaseAnimator" ? [start] : [null, start]) })];
+    }
     return [node("Group", {}, { children: content() })];
   }
-  if (UNSUPPORTED.has(name)) {
+  if (UNSUPPORTED[name]) {
     ctx.note(name);
-    return [node("Unsupported", { name })];
+    return [node("Unsupported", { name, kind: UNSUPPORTED[name] })];
+  }
+  if (MARKS.has(name)) {
+    const props: Record<string, unknown> = { mark: name.replace(/Mark$/, "").toLowerCase() };
+    for (const key of ["x", "y", "xStart", "xEnd", "yStart", "yEnd", "angle"]) {
+      const p = plot(labeled(key));
+      if (p) props[key] = p;
+    }
+    const series = plot(labeled("series"));
+    if (series) props.series = String(series.v);
+    for (const key of ["width", "height", "innerRadius", "outerRadius", "angularInset"]) {
+      const e = extent(labeled(key));
+      if (e !== undefined) props[key] = e;
+    }
+    return [node("Mark", props)];
   }
   if (SHAPES.has(name)) {
     if (name === "RoundedRectangle" || name === "UnevenRoundedRectangle") {
@@ -469,9 +588,32 @@ export function makeView(name: string, args: EvArg[], trailing: V[], ctx: Ctx): 
   }
   switch (name) {
     case "Text": {
-      const v = first ?? labeled("verbatim");
-      if (isT(v ?? null, "date")) return [node("Text", { text: new Date((v as { ms: number }).ms).toLocaleDateString() })];
+      const v = first ?? labeled("verbatim") ?? labeled("timerInterval");
+      const style = labeled("format") ?? labeled("style");
+      if (v !== undefined && v !== null && (style !== undefined || isT(v, "date")) && (isNum(v) || isT(v, "date"))) return [node("Text", { text: ctx.format(v, style) })];
+      if (v !== undefined && v !== null && isT(v, "range")) return [node("Text", { text: `${v.lo} – ${v.hi}` })];
       return [node("Text", { text: text(v) })];
+    }
+    case "ToolbarItem":
+    case "ToolbarItemGroup":
+      return [node("ToolbarItem", { placement: symName(labeled("placement"), "automatic") }, { children: content() })];
+    case "ToolbarSpacer":
+      return [node("ToolbarItem", { placement: symName(labeled("placement"), "automatic") }, { children: [node("Spacer")] })];
+    case "EditButton":
+    case "RenameButton":
+      return [node("Button", { title: name === "EditButton" ? "Edit" : "Rename" })];
+    case "Chart": {
+      const marks = first !== undefined && first !== null && trailing[0] !== undefined ? forEachRows(first, trailing[0], ctx) : content();
+      return [node("Chart", {}, { children: flattenGroups(marks).filter((m) => m.type === "Mark") })];
+    }
+    case "Gauge": {
+      const r = rangeOf(labeled("in")) ?? { min: 0, max: 1 };
+      const part = (label: string) => {
+        const fn = labeled(label);
+        return fn === undefined ? undefined : text({ t: "views", nodes: ctx.build(fn) });
+      };
+      const title = trailing[0] !== undefined ? text({ t: "views", nodes: ctx.build(trailing[0]) }) : part("label");
+      return [node("Gauge", { value: num(labeled("value") ?? first ?? 0), min: r.min, max: r.max, title, current: part("currentValueLabel"), low: part("minimumValueLabel"), high: part("maximumValueLabel") })];
     }
     case "Image": {
       const system = labeled("systemName");
@@ -595,8 +737,13 @@ export function makeView(name: string, args: EvArg[], trailing: V[], ctx: Ctx): 
       return [n];
     }
     case "DatePicker":
-    case "ColorPicker":
-      return [node("LabeledContent", {}, { children: [node("Text", { text: text(first ?? name) }), node("Text", { text: name === "DatePicker" ? "1 Jan 2026" : "●" }, { mods: [{ m: "foreground", color: { name: "accentColor" } }] })] })];
+    case "ColorPicker": {
+      const selection = bindingOf(labeled("selection"))?.get();
+      const shown = name === "ColorPicker" ? "●" : selection !== undefined && selection !== null && isT(selection, "date") ? ctx.format(selection, { t: "sym", name: "__parts", args: [{ label: "date", value: { t: "sym", name: "abbreviated" } }, { label: "time", value: { t: "sym", name: "omitted" } }] }) : "1 Jan 2026";
+      const tint = name === "ColorPicker" && selection !== undefined ? toColor(selection ?? undefined, ctx.scheme) : null;
+      const title = first !== undefined ? [node("Text", { text: text(first) })] : ctx.build(trailing[0] ?? labeled("label"));
+      return [node("HStack", { alignment: "center" }, { children: [...title, node("Spacer"), node("Text", { text: shown }, { mods: [{ m: "foreground", color: tint ?? { name: "accentColor" } }] })] })];
+    }
     case "ProgressView": {
       const value = labeled("value");
       const total = labeled("total");
@@ -660,8 +807,16 @@ export function makeView(name: string, args: EvArg[], trailing: V[], ctx: Ctx): 
     case "NavigationStack":
     case "NavigationView":
       return [node("NavigationStack", {}, { children: content() })];
-    case "NavigationSplitView":
-      return [node("NavigationStack", {}, { children: ctx.build(trailing[0] ?? labeled("sidebar")) })];
+    case "NavigationSplitView": {
+      const sidebar = ctx.build(trailing[0] ?? labeled("sidebar"));
+      if (!ctx.wide) return [node("NavigationStack", {}, { children: sidebar })];
+      const detail = ctx.build(labeled("detail"));
+      const middle = ctx.build(labeled("content"));
+      const columns = [node("NavigationStack", { column: "sidebar" }, { children: sidebar })];
+      if (middle.length) columns.push(node("NavigationStack", { column: "content" }, { children: middle }));
+      columns.push(node("NavigationStack", { column: "detail" }, { children: detail }));
+      return [node("SplitView", {}, { children: columns })];
+    }
     case "NavigationLink": {
       const dest = labeled("destination");
       const destNodes = dest === undefined ? [] : isT(dest, "closure") ? ctx.build(dest) : (nodesOf(dest) ?? []);
@@ -699,20 +854,19 @@ export function makeView(name: string, args: EvArg[], trailing: V[], ctx: Ctx): 
     }
     case "LabeledContent": {
       const value = labeled("value") ?? arg(args, null, 1);
-      return [node("HStack", { alignment: "center" }, { children: [node("Text", { text: text(first ?? "") }), node("Spacer"), node("Text", { text: text(value ?? ""), }, { mods: [{ m: "foreground", color: { name: "secondary" } }] })] })];
-    }
-    case "GeometryReader": {
-      const proxy: V = {
-        t: "tuple",
-        items: [{ t: "tuple", items: [new Dbl(ctx.size.width), new Dbl(ctx.size.height)], labels: ["width", "height"] }],
-        labels: ["size"],
-      };
-      return [node("ZStack", { alignment: "topLeading" }, { children: ctx.build(trailing[0], [proxy]), mods: [{ m: "frame", maxWidth: "inf", maxHeight: "inf", alignment: "topLeading" }] })];
+      const label = first !== undefined ? [node("Text", { text: text(first) })] : ctx.build(labeled("label"));
+      const trailingView = trailing[0] !== undefined ? ctx.build(trailing[0]) : [node("Text", { text: text(value ?? "") }, { mods: [{ m: "foreground", color: { name: "secondary" } }] })];
+      return [node("HStack", { alignment: "center" }, { children: [...label, node("Spacer"), ...trailingView] })];
     }
     case "ContentUnavailableView": {
       const system = labeled("systemImage");
       const desc = labeled("description");
       const children: ViewNode[] = [];
+      if (first === undefined && trailing[0] !== undefined) {
+        const head = ctx.build(trailing[0]).map((n) => ({ ...n, mods: [...(n.mods ?? []), { m: "font" as const, font: { style: "title2" as const, weight: "bold" as const } }] }));
+        const detail = ctx.build(desc).map((n) => ({ ...n, mods: [...(n.mods ?? []), { m: "foreground" as const, color: { name: "secondary" } }, { m: "align" as const, value: "center" as const }] }));
+        return [node("VStack", { alignment: "center", spacing: 12 }, { children: [...head, ...detail, ...ctx.build(labeled("actions"))], mods: [{ m: "padding", top: 16, leading: 16, bottom: 16, trailing: 16 }, { m: "frame", maxWidth: "inf", maxHeight: "inf" }] })];
+      }
       if (system !== undefined) children.push(node("Image", { system: describe(system) }, { mods: [{ m: "font", font: { size: 48 } }, { m: "foreground", color: { name: "secondary" } }] }));
       children.push(node("Text", { text: text(first ?? "") }, { mods: [{ m: "font", font: { style: "title2", weight: "bold" } }] }));
       if (desc !== undefined) children.push(node("Text", { text: text(desc) }, { mods: [{ m: "foreground", color: { name: "secondary" } }, { m: "align", value: "center" }] }));
@@ -721,9 +875,7 @@ export function makeView(name: string, args: EvArg[], trailing: V[], ctx: Ctx): 
     case "LinearGradient":
     case "RadialGradient":
     case "AngularGradient": {
-      const colorsArg = labeled("colors") ?? (isT(labeled("gradient") ?? null, "tuple") ? undefined : undefined);
-      const colors = Array.isArray(colorsArg) ? colorsArg.map((c) => toColor(c, ctx.scheme)).filter((c): c is ColorSpec => !!c) : [];
-      return [node("Color", { color: colors[0] ?? { name: "accentColor" }, colors })];
+      return [node("Color", { color: gradientOf(name, args, ctx.scheme) ?? { name: "accentColor" } })];
     }
   }
   return null;
@@ -741,6 +893,7 @@ export function forEachRows(data: V, fn: V | undefined, ctx: Ctx): ViewNode[] {
   const out: ViewNode[] = [];
   const items = sequence(data);
   for (const item of items.slice(0, 500)) out.push(...ctx.build(fn, [item]));
+  if (items.length > 500) ctx.note("ForEach: first 500 rows");
   return out;
 }
 
@@ -749,7 +902,8 @@ export function sequence(v: V): V[] {
   if (Array.isArray(v)) return v;
   if (isT(v, "range")) {
     const out: V[] = [];
-    for (let i = v.lo; i < v.hi && out.length < 1000; i++) out.push(i);
+    const end = rangeEnd(v);
+    for (let i = Number.isFinite(v.lo) ? v.lo : 0; i < end && out.length < 100000; i++) out.push(i);
     return out;
   }
   if (isT(v, "binding")) {
@@ -792,7 +946,6 @@ const IGNORED = new Set([
   "contextMenu",
   "swipeActions",
   "refreshable",
-  "searchable",
   "keyboardType",
   "textInputAutocapitalization",
   "autocapitalization",
@@ -811,7 +964,6 @@ const IGNORED = new Set([
   "popover",
   "alert",
   "confirmationDialog",
-  "toolbar",
   "toolbarBackground",
   "toolbarColorScheme",
   "toolbarRole",
@@ -833,17 +985,12 @@ const IGNORED = new Set([
   "menuStyle",
   "tabViewStyle",
   "indexViewStyle",
-  "listRowSeparator",
-  "listRowInsets",
-  "listRowBackground",
   "listSectionSeparator",
-  "scrollContentBackground",
   "scrollIndicators",
   "scrollDismissesKeyboard",
   "scrollTargetBehavior",
   "scrollTargetLayout",
   "scrollPosition",
-  "safeAreaInset",
   "safeAreaPadding",
   "statusBarHidden",
   "persistentSystemOverlays",
@@ -863,7 +1010,6 @@ const IGNORED = new Set([
   "presentationDetents",
   "presentationDragIndicator",
   "tabItemBadge",
-  "badge",
   "redacted",
   "unredacted",
   "privacySensitive",
@@ -891,14 +1037,7 @@ const IGNORED = new Set([
   "headerProminence",
   "monospacedDigit",
   "multilineTextAlignmentIfAvailable",
-  "brightness",
-  "contrast",
-  "saturation",
-  "grayscale",
-  "hueRotation",
   "colorMultiply",
-  "colorInvert",
-  "blur",
   "luminanceToAlpha",
   "flipsForRightToLeftLayoutDirection",
   "imageScaleIfAvailable",
@@ -949,14 +1088,142 @@ const IGNORED = new Set([
   "frameIfAvailable",
 ]);
 
-const BUTTON_STYLES = new Set(["borderedProminent", "bordered", "plain", "borderless", "automatic"]);
+const BUTTON_STYLES = new Set(["borderedProminent", "bordered", "plain", "borderless", "automatic", "glass", "glassProminent", "custom"]);
+
+const SILENT =
+  /^(on[A-Z]|accessibility|scroll[A-Z]|presentation[A-Z]|toolbar[A-Z]|navigation[A-Z]|search[A-Z]|focus|keyboard|submit|writingTools|symbol[A-Z]|list[A-Z]|chart[A-Z]|map[A-Z]|glassEffect[A-Z]|sensory|default[A-Z]|interactive|widget|activity|handles|userActivity|defers|persistent|statusBar|grid[A-Z]|alignmentGuide|fontWidth|deleteDisabled|moveDisabled|selectionDisabled|labelsHidden|menu[A-Z]|tabBar[A-Z]|tabView[A-Z]|matched|backgroundExtension|typesetting|invalidatable|popoverTip|tip[A-Z]|textContentType|textInput|speech|dialog[A-Z]|fileDialog|inspector[A-Z]|window[A-Z]|commands|handGesture|digitalCrown|privacy|redacted|transaction|transformEffect|projectionEffect|layoutValue|safeArea[A-Z]|containerValue|preference|anchorPreference|backgroundPreferenceValue|overlayPreferenceValue|coordinateSpace|sectionActions|springLoading|dropDestination|draggable|itemProvider|exportable|importable|copyable|cuttable|pasteDestination)/;
+
+function relabel(n: ViewNode, style: string): ViewNode {
+  if (n.type === "Label") return { ...n, props: { ...n.props, labelStyle: style } };
+  if (!n.children?.length && !n.label?.length) return n;
+  return { ...n, children: n.children?.map((c) => relabel(c, style)), label: n.label?.map((c) => relabel(c, style)) };
+}
+
+function setProp(nodes: ViewNode[], type: string, key: string, value: unknown): ViewNode[] {
+  return nodes.map((n) => (n.type === type ? { ...n, props: { ...n.props, [key]: value } } : n));
+}
+
+function degreesOf(v: V | undefined): number {
+  if (v === undefined || v === null) return 0;
+  if (isNum(v)) return num(v);
+  if (isT(v, "sym")) {
+    const a = num(v.args?.[0]?.value ?? 0);
+    return v.name === "radians" ? (a * 180) / Math.PI : a;
+  }
+  return 0;
+}
 
 export function applyMod(nodes: ViewNode[], name: string, args: EvArg[], trailing: V[], ctx: Ctx): ViewNode[] | null {
   const first = arg(args, null);
   const labeled = (label: string) => args.find((a) => a.label === label)?.value;
   const push = (mod: Mod) => nodes.map((n) => ({ ...n, mods: [...(n.mods ?? []), mod] }));
-  if (IGNORED.has(name)) return nodes;
   switch (name) {
+    case "toolbar": {
+      const fn = trailing[0] ?? labeled("content");
+      if (fn === undefined || !isT(fn, "closure")) return nodes;
+      const items = flattenGroups(ctx.build(fn)).map((n) => (n.type === "ToolbarItem" ? { placement: String(n.props.placement ?? "automatic"), view: n.children ?? [] } : { placement: "automatic", view: [n] }));
+      return items.length ? push({ m: "toolbar", items }) : nodes;
+    }
+    case "safeAreaInset": {
+      const edge = symName(labeled("edge"), "bottom");
+      const view = ctx.build(trailing[0] ?? labeled("content"));
+      if (!view.length) return nodes;
+      return push({ m: "inset", edge: edge === "top" || edge === "leading" || edge === "trailing" ? edge : "bottom", view });
+    }
+    case "tabViewBottomAccessory": {
+      const view = ctx.build(trailing[0] ?? labeled("content"));
+      return view.length ? push({ m: "accessory", view }) : nodes;
+    }
+    case "glassEffect": {
+      const mod: Extract<Mod, { m: "glass" }> = { m: "glass" };
+      const shape = toShape(labeled("in"));
+      if (shape) mod.shape = shape;
+      if (first !== undefined && first !== null && isT(first, "sym")) {
+        if (first.name === "clear") mod.clear = true;
+        if (first.name === "identity") return nodes;
+        for (const part of first.args ?? []) {
+          if (part.label === "interactive") mod.interactive = true;
+          if (part.label === "tint" && isT(part.value, "sym")) {
+            const tint = toColor(part.value.args?.[0]?.value, ctx.scheme);
+            if (tint) mod.tint = tint;
+          }
+        }
+      }
+      return push(mod);
+    }
+    case "blur":
+      return push({ m: "effect", kind: "blur", value: num(labeled("radius") ?? first ?? 0) });
+    case "brightness":
+    case "contrast":
+    case "saturation":
+    case "grayscale":
+      return push({ m: "effect", kind: name, value: num(first ?? 0) });
+    case "hueRotation":
+      return push({ m: "effect", kind: "hueRotation", value: degreesOf(first) });
+    case "colorInvert":
+      return push({ m: "effect", kind: "colorInvert", value: 1 });
+    case "clipped":
+      return push({ m: "clip", shape: { shape: "rect" } });
+    case "position": {
+      if (first !== undefined && first !== null && isT(first, "tuple")) return push({ m: "position", x: num(first.items[0] ?? 0), y: num(first.items[1] ?? 0) });
+      return push({ m: "position", x: num(labeled("x") ?? 0), y: num(labeled("y") ?? 0) });
+    }
+    case "gridCellColumns":
+      return push({ m: "gridSpan", value: Math.max(1, num(first ?? 1)) });
+    case "badge": {
+      if (first === undefined || first === null) return nodes;
+      const label = isNum(first) ? (num(first) > 0 ? String(num(first)) : "") : text(first);
+      return label ? push({ m: "badge", text: label }) : nodes;
+    }
+    case "searchable":
+      return push({ m: "search", prompt: text(labeled("prompt") ?? "Search") });
+    case "colorScheme": {
+      const v = symName(first, "");
+      return v === "dark" || v === "light" ? push({ m: "scheme", value: v }) : nodes;
+    }
+    case "containerBackground": {
+      if (trailing[0] !== undefined) return push({ m: "background", view: ctx.build(trailing[0]) });
+      const color = toColor(first, ctx.scheme);
+      return color ? push({ m: "background", color }) : nodes;
+    }
+    case "labelStyle":
+      return nodes.map((n) => relabel(n, symName(first, "automatic")));
+    case "gaugeStyle":
+      return setProp(nodes, "Gauge", "style", symName(first, "automatic"));
+    case "progressViewStyle":
+      return setProp(nodes, "ProgressView", "style", symName(first, "automatic"));
+    case "interpolationMethod":
+      return setProp(nodes, "Mark", "smooth", !["linear", "stepStart", "stepEnd", "stepCenter"].includes(symName(first, "linear")));
+    case "lineStyle": {
+      const width = first !== undefined && first !== null && isT(first, "tuple") ? num(first.items[first.labels.indexOf("lineWidth")] ?? 2) : 2;
+      const dash = first !== undefined && first !== null && isT(first, "tuple") ? first.items[first.labels.indexOf("dash")] : undefined;
+      return push({ m: "lineStyle", width, ...(Array.isArray(dash) ? { dash: dash.map((d) => num(d)) } : {}) });
+    }
+    case "chartYScale":
+    case "chartXScale": {
+      const domain = labeled("domain");
+      if (domain === undefined || domain === null) return nodes;
+      const key = name === "chartYScale" ? "yDomain" : "xDomain";
+      if (isT(domain, "range")) return setProp(nodes, "Chart", key, [domain.lo, domain.hi]);
+      if (Array.isArray(domain)) return setProp(nodes, "Chart", key, domain.map((d) => (isNum(d) ? num(d) : describe(d))));
+      return nodes;
+    }
+    case "chartXAxis":
+    case "chartYAxis":
+      return symName(first, "") === "hidden" ? setProp(nodes, "Chart", name === "chartXAxis" ? "xAxis" : "yAxis", false) : nodes;
+    case "chartLegend":
+      return symName(first, "") === "hidden" ? setProp(nodes, "Chart", "legend", false) : nodes;
+    case "chartForegroundStyleScale": {
+      if (first === undefined || first === null) return nodes;
+      const palette: Record<string, ColorSpec> = {};
+      if (isT(first, "dict")) {
+        for (const [key, value] of first.m.values()) {
+          const c = toColor(value, ctx.scheme);
+          if (c) palette[describe(key)] = c;
+        }
+      }
+      return Object.keys(palette).length ? setProp(nodes, "Chart", "palette", palette) : nodes;
+    }
     case "padding": {
       if (isT(first ?? null, "tuple")) {
         const t = first as Extract<V, { t: "tuple" }>;
@@ -1021,6 +1288,8 @@ export function applyMod(nodes: ViewNode[], name: string, args: EvArg[], trailin
       return push({ m: "lineSpacing", value: num(first ?? 0) });
     case "foregroundStyle":
     case "foregroundColor": {
+      const by = plot(labeled("by"));
+      if (by) return setProp(nodes, "Mark", "series", String(by.v));
       const c = toColor(first, ctx.scheme);
       return c ? push({ m: "foreground", color: c }) : nodes;
     }
@@ -1043,7 +1312,8 @@ export function applyMod(nodes: ViewNode[], name: string, args: EvArg[], trailin
     }
     case "overlay": {
       const al = labeled("alignment");
-      const v = trailing[0] !== undefined ? ctx.build(trailing[0]) : (nodesOf(first ?? null) ?? []);
+      const tinted = trailing[0] === undefined && !nodesOf(first ?? null) ? toColor(first, ctx.scheme) : null;
+      const v = trailing[0] !== undefined ? ctx.build(trailing[0]) : tinted ? [node("Color", { color: tinted })] : (nodesOf(first ?? null) ?? []);
       if (!v.length) return nodes;
       return push({ m: "overlay", view: v, alignment: al === undefined ? undefined : symName(al, "center") });
     }
@@ -1107,7 +1377,7 @@ export function applyMod(nodes: ViewNode[], name: string, args: EvArg[], trailin
     }
     case "lineLimit": {
       if (first === null) return nodes;
-      if (isT(first ?? null, "range")) return push({ m: "lineLimit", value: (first as { hi: number }).hi - 1 });
+      if (first !== undefined && isT(first, "range")) return push({ m: "lineLimit", value: first.closed ? first.hi : first.hi - 1 });
       return isNum(first ?? null) ? push({ m: "lineLimit", value: num(first ?? 1) }) : nodes;
     }
     case "buttonStyle": {
@@ -1137,9 +1407,18 @@ export function applyMod(nodes: ViewNode[], name: string, args: EvArg[], trailin
     case "stroke":
     case "strokeBorder": {
       const c = toColor(first, ctx.scheme) ?? { name: "primary" };
-      const style = labeled("style");
-      const fromStyle = isT(style ?? null, "tuple") ? (style as Extract<V, { t: "tuple" }>).items[0] : undefined;
-      return push({ m: "stroke", color: c, width: num(labeled("lineWidth") ?? fromStyle ?? 1) });
+      const style = labeled("style") ?? (first !== undefined && first !== null && isT(first, "tuple") ? first : undefined);
+      const part = (label: string) => (style !== undefined && style !== null && isT(style, "tuple") && style.labels.includes(label) ? style.items[style.labels.indexOf(label)] : undefined);
+      const cap = part("lineCap");
+      const dash = part("dash");
+      return push({
+        m: "stroke",
+        color: c,
+        width: num(labeled("lineWidth") ?? part("lineWidth") ?? 1),
+        ...(cap !== undefined && cap !== null && isT(cap, "sym") ? { cap: cap.name } : {}),
+        ...(Array.isArray(dash) && dash.length ? { dash: dash.map((d) => num(d)) } : {}),
+        ...(name === "strokeBorder" ? { inset: true } : {}),
+      });
     }
     case "trim":
       return push({ m: "trim", from: num(labeled("from") ?? 0), to: num(labeled("to") ?? 1) });
@@ -1174,6 +1453,23 @@ export function applyMod(nodes: ViewNode[], name: string, args: EvArg[], trailin
       return push({ m: "tabItem", label: ctx.build(trailing[0] ?? first) });
     case "listStyle":
       return push({ m: "listStyle", value: symName(first, "automatic") });
+    case "scrollContentBackground":
+      return push({ m: "scrollBg", hidden: symName(first, "automatic") === "hidden" });
+    case "listRowSeparator":
+      return push({ m: "rowSep", hidden: symName(first, "automatic") === "hidden" });
+    case "listRowBackground": {
+      if (first === undefined || first === null) return nodes;
+      const color = toColor(first, ctx.scheme);
+      if (color) return push({ m: "rowBg", color });
+      const v = nodesOf(first);
+      return v ? push({ m: "rowBg", view: v }) : nodes;
+    }
+    case "listRowInsets": {
+      if (!isT(first ?? null, "tuple")) return nodes;
+      const t = first as Extract<V, { t: "tuple" }>;
+      const get = (l: string) => num(t.items[t.labels.indexOf(l)] ?? 0);
+      return push({ m: "rowInsets", top: get("top"), leading: get("leading"), bottom: get("bottom"), trailing: get("trailing") });
+    }
     case "pickerStyle":
       return push({ m: "pickerStyle", value: symName(first, "automatic") });
     case "textFieldStyle":
@@ -1187,5 +1483,6 @@ export function applyMod(nodes: ViewNode[], name: string, args: EvArg[], trailin
       });
     }
   }
+  if (IGNORED.has(name) || SILENT.test(name)) return nodes;
   return null;
 }

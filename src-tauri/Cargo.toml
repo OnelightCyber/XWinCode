@@ -1,6 +1,6 @@
 [package]
 name = "xwincode"
-version = "2.0.0"
+version = "2.1.0"
 description = "XWinCode, an Xcode-style Swift IDE for Windows"
 authors = ["OnelightCyber"]
 license = "GPL-3.0-or-later"

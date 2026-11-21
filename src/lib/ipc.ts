@@ -8,10 +8,15 @@ import type {
   DeviceApp,
   Diagnostic,
   Entry,
+  GitBranch,
+  GitCommit,
+  GitStatus,
   InstallRecord,
   ProjectConfig,
   ProjectInfo,
+  ProjectSymbol,
   SearchHit,
+  SearchOptions,
   Settings,
   ToolComponent,
 } from "./types";
@@ -31,13 +36,28 @@ export const api = {
   createDir: (path: string) => call<void>("create_dir", { path }),
   renamePath: (from: string, to: string) => call<void>("rename_path", { from, to }),
   deletePath: (path: string) => call<void>("delete_path", { path }),
+  duplicatePath: (path: string) => call<string>("duplicate_path", { path }),
+  importPaths: (sources: string[], dir: string) => call<string[]>("import_paths", { sources, dir }),
+  movePath: (from: string, dir: string) => call<string>("move_path", { from, dir }),
   pathExists: (path: string) => call<boolean>("path_exists", { path }),
-  searchProject: (root: string, query: string, caseSensitive: boolean) =>
-    call<SearchHit[]>("search_project", { root, query, caseSensitive }),
+  searchProject: (root: string, query: string, options: SearchOptions) => call<SearchHit[]>("search_project", { root, query, options }),
   listFiles: (root: string) => call<string[]>("list_files", { root }),
-  replaceInFile: (path: string, query: string, replacement: string, caseSensitive: boolean) =>
-    call<number>("replace_in_file", { path, query, replacement, caseSensitive }),
+  projectSymbols: (root: string) => call<ProjectSymbol[]>("project_symbols", { root }),
+  listSources: (root: string) => call<{ path: string; stamp: string }[]>("list_sources", { root }),
+  replaceInFile: (path: string, query: string, replacement: string, options: SearchOptions) =>
+    call<number>("replace_in_file", { path, query, replacement, options }),
   setLanguage: (language: string) => call<void>("set_language", { language }),
+
+  gitStatus: (root: string) => call<GitStatus>("git_status", { root }),
+  gitOriginal: (root: string, path: string) => call<string | null>("git_original", { root, path }),
+  gitStage: (root: string, paths: string[], stage: boolean) => call<void>("git_stage", { root, paths, stage }),
+  gitDiscard: (root: string, paths: string[]) => call<void>("git_discard", { root, paths }),
+  gitCommit: (root: string, message: string, everything: boolean) => call<string>("git_commit", { root, message, everything }),
+  gitInit: (root: string) => call<void>("git_init", { root }),
+  gitBranches: (root: string) => call<GitBranch[]>("git_branches", { root }),
+  gitSwitch: (root: string, name: string, create: boolean) => call<void>("git_switch", { root, name, create }),
+  gitSync: (root: string, op: "fetch" | "pull" | "push") => call<string>("git_sync", { root, op }),
+  gitLog: (root: string, limit: number) => call<GitCommit[]>("git_log", { root, limit }),
 
   createProject: (options: { template: string; name: string; organizationId: string; location: string }) =>
     call<ProjectInfo>("create_project", { options }),

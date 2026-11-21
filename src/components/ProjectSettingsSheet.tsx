@@ -3,11 +3,84 @@ import { ImagePlus, Smartphone } from "lucide-react";
 import { t, type TKey } from "../i18n";
 import { pickFile } from "../lib/dialogs";
 import { api, errorMessage, isTauri } from "../lib/ipc";
-import { getDoc, reloadDoc } from "../lib/models";
-import { join } from "../lib/paths";
+import { allDocs, reloadDoc } from "../lib/models";
+import { basename, dirname, samePath } from "../lib/paths";
 import { useStore } from "../lib/store";
 import type { ProjectConfig } from "../lib/types";
-import { Switch } from "./Controls";
+import { Seg, Select, Switch } from "./Controls";
+
+const IOS_VERSIONS = ["15.0", "16.0", "17.0", "18.0", "26.0"];
+const DEFAULT_ORIENTATIONS = ["portrait", "landscapeLeft", "landscapeRight"];
+const ORIENTATIONS: { id: string; label: TKey }[] = [
+  { id: "portrait", label: "ps.orient.portrait" },
+  { id: "upsideDown", label: "ps.orient.upsideDown" },
+  { id: "landscapeLeft", label: "ps.orient.landscapeLeft" },
+  { id: "landscapeRight", label: "ps.orient.landscapeRight" },
+];
+const BACKGROUND_MODES: { id: string; label: TKey }[] = [
+  { id: "audio", label: "ps.bg.audio" },
+  { id: "location", label: "ps.bg.location" },
+  { id: "fetch", label: "ps.bg.fetch" },
+  { id: "remote-notification", label: "ps.bg.remote" },
+  { id: "bluetooth-central", label: "ps.bg.bluetooth" },
+  { id: "processing", label: "ps.bg.processing" },
+];
+const CAPABILITIES: { id: string; label: string | TKey; key: string; paid?: boolean; plain?: boolean }[] = [
+  { id: "healthkit", label: "HealthKit", key: "com.apple.developer.healthkit", plain: true },
+  { id: "homekit", label: "HomeKit", key: "com.apple.developer.homekit", plain: true },
+  { id: "push", label: "ps.cap.push", key: "aps-environment", paid: true },
+  { id: "appleSignIn", label: "ps.cap.appleSignIn", key: "com.apple.developer.applesignin", paid: true },
+  { id: "nfc", label: "ps.cap.nfc", key: "com.apple.developer.nfc.readersession.formats", paid: true },
+];
+
+function toggled(list: string[], id: string, on: boolean): string[] {
+  return on ? (list.includes(id) ? list : [...list, id]) : list.filter((x) => x !== id);
+}
+
+function ListCapability({ label, hint, paid, placeholder, values, onChange }: { label: string; hint: string; paid?: boolean; placeholder: string; values: string[]; onChange: (v: string[]) => void }) {
+  const [open, setOpen] = useState(values.length > 0);
+  const [text, setText] = useState(values.join("\n"));
+  const on = open || values.length > 0;
+  return (
+    <div className={`set-row perm-row${on ? " on" : ""}`}>
+      <Switch
+        on={on}
+        onChange={(v) => {
+          setOpen(v);
+          if (!v) {
+            setText("");
+            onChange([]);
+          }
+        }}
+      />
+      <div className="set-label">
+        <div className="l">
+          {label}
+          {paid && <span className="ps-paid">{t("ps.paid")}</span>}
+        </div>
+        {on ? (
+          <textarea
+            className="input perm-text ps-list"
+            rows={Math.max(1, Math.min(4, text.split("\n").length))}
+            placeholder={placeholder}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              onChange(
+                e.target.value
+                  .split(/[\n,]/)
+                  .map((x) => x.trim())
+                  .filter(Boolean),
+              );
+            }}
+          />
+        ) : (
+          <div className="h mono">{hint}</div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const PERMISSIONS: { key: string; label: TKey }[] = [
   { key: "NSCameraUsageDescription", label: "perm.camera" },
@@ -121,9 +194,12 @@ export function ProjectSettingsSheet() {
     setError(null);
     try {
       await api.writeProjectConfig(project.root, config);
-      for (const name of ["xtool.yml", "Info.plist"]) {
-        const path = join(project.root, name);
-        if (getDoc(path)) reloadDoc(path, await api.readTextFile(path));
+      for (const doc of allDocs()) {
+        const name = basename(doc.path).toLowerCase();
+        const settings = name === "xtool.yml" || name === "package.swift" || name.endsWith(".plist") || name.endsWith(".entitlements");
+        if (!settings || !(samePath(dirname(doc.path), project.root) || doc.path.toLowerCase().startsWith(`${project.root.toLowerCase()}\\`))) continue;
+        const text = await api.readTextFile(doc.path).catch(() => null);
+        if (text !== null) reloadDoc(doc.path, text);
       }
       useStore.setState({ project: { ...project, bundleId: config.bundleId } });
       void useStore.getState().refreshTree();
@@ -189,6 +265,117 @@ export function ProjectSettingsSheet() {
                     <div className="row">
                       <input className="input" style={{ width: 96 }} value={config.version} onChange={(e) => patch({ version: e.target.value.trim() })} />
                       <input className="input" style={{ width: 72 }} value={config.build} onChange={(e) => patch({ build: e.target.value.trim() })} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="set-group">
+                <h3>{t("ps.deployment")}</h3>
+                <div className="set-card">
+                  <div className="set-row">
+                    <div className="set-label">
+                      <div className="l">{t("ps.minIos")}</div>
+                      <div className="h">{config.minIos === null ? t("ps.minIos.missing") : t("ps.minIos.hint")}</div>
+                    </div>
+                    {config.minIos !== null && (
+                      <Select
+                        width={120}
+                        value={config.minIos}
+                        options={[...new Set([...IOS_VERSIONS, config.minIos])].sort((a, b) => Number(a) - Number(b)).map((v) => ({ value: v, label: `iOS ${v}` }))}
+                        onChange={(v) => patch({ minIos: v })}
+                      />
+                    )}
+                  </div>
+                  <div className="set-row">
+                    <div className="set-label">
+                      <div className="l">{t("ps.devices")}</div>
+                      <div className="h">{t("ps.devices.hint")}</div>
+                    </div>
+                    <Seg
+                      small
+                      value={config.devices ?? "universal"}
+                      options={[
+                        { value: "iphone", label: "iPhone" },
+                        { value: "ipad", label: "iPad" },
+                        { value: "universal", label: t("ps.devices.universal") },
+                      ]}
+                      onChange={(v) => patch({ devices: v as ProjectConfig["devices"] })}
+                    />
+                  </div>
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <div className="l">{t("ps.orientations")}</div>
+                      <div className="h">{t("ps.orientations.hint")}</div>
+                    </div>
+                    <div className="ps-chips">
+                      {ORIENTATIONS.map((o) => {
+                        const current = config.orientations ?? DEFAULT_ORIENTATIONS;
+                        const on = current.includes(o.id);
+                        return (
+                          <button key={o.id} className={`ps-chip${on ? " on" : ""}`} onClick={() => patch({ orientations: ORIENTATIONS.map((x) => x.id).filter((id) => toggled(current, o.id, !on).includes(id)) })}>
+                            {t(o.label)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="set-row">
+                    <div className="set-label">
+                      <div className="l">{t("ps.appearance")}</div>
+                      <div className="h">{t("ps.appearance.hint")}</div>
+                    </div>
+                    <Seg
+                      small
+                      value={config.appearance ?? "automatic"}
+                      options={[
+                        { value: "automatic", label: t("ps.appearance.auto") },
+                        { value: "light", label: t("set.theme.light") },
+                        { value: "dark", label: t("set.theme.dark") },
+                      ]}
+                      onChange={(v) => patch({ appearance: v as ProjectConfig["appearance"] })}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="set-group">
+                <h3>{t("ps.capabilities")}</h3>
+                <div className="set-card">
+                  {CAPABILITIES.map((c) => {
+                    const on = config.capabilities.includes(c.id);
+                    return (
+                      <div key={c.id} className={`set-row perm-row${on ? " on" : ""}`}>
+                        <Switch on={on} onChange={(v) => patch({ capabilities: toggled(config.capabilities, c.id, v) })} />
+                        <div className="set-label">
+                          <div className="l">
+                            {c.plain ? c.label : t(c.label as TKey)}
+                            {c.paid && <span className="ps-paid">{t("ps.paid")}</span>}
+                          </div>
+                          <div className="h mono">{c.key}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <ListCapability label={t("ps.cap.appGroups")} hint="com.apple.security.application-groups" placeholder={`group.${config.bundleId}`} values={config.appGroups} onChange={(v) => patch({ appGroups: v })} />
+                  <ListCapability label={t("ps.cap.domains")} hint="com.apple.developer.associated-domains" paid placeholder="applinks:example.com" values={config.associatedDomains} onChange={(v) => patch({ associatedDomains: v })} />
+                </div>
+                <div className="set-foot">{t("ps.capabilities.hint")}</div>
+              </div>
+              <div className="set-group">
+                <h3>{t("ps.background")}</h3>
+                <div className="set-card">
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <div className="h">{t("ps.background.hint")}</div>
+                    </div>
+                    <div className="ps-chips">
+                      {BACKGROUND_MODES.map((b) => {
+                        const on = config.backgroundModes.includes(b.id);
+                        return (
+                          <button key={b.id} className={`ps-chip${on ? " on" : ""}`} onClick={() => patch({ backgroundModes: toggled(config.backgroundModes, b.id, !on) })}>
+                            {t(b.label)}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>

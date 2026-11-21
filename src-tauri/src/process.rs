@@ -29,9 +29,12 @@ struct Running {
     cancelled: bool,
 }
 
+const MAX_PENDING: usize = 256 * 1024;
+
 #[derive(Default)]
 pub struct TaskManager {
     current: Mutex<Option<Running>>,
+    starting: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone, Serialize)]
@@ -91,6 +94,7 @@ impl TaskManager {
     }
 
     pub async fn spawn(&self, app: AppHandle, spec: TaskSpec) -> Result<u64, String> {
+        let _starting = self.starting.lock().await;
         if self.is_running() {
             self.stop();
             for _ in 0..30 {
@@ -202,6 +206,11 @@ async fn pump<R: AsyncRead + Unpin>(app: AppHandle, id: u64, stream: &'static st
             };
             let Some(pos) = pos else { break };
             let line: Vec<u8> = pending.drain(..=pos).collect();
+            lines.push(clean_line(&app, id, &line));
+        }
+        if pending.len() > MAX_PENDING {
+            let cut = if wide { MAX_PENDING & !1 } else { MAX_PENDING };
+            let line: Vec<u8> = pending.drain(..cut).collect();
             lines.push(clean_line(&app, id, &line));
         }
         emit_lines(&app, id, stream, lines);

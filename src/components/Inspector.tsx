@@ -21,6 +21,15 @@ function fileType(path: string): string {
       return "Markdown";
     case "plist":
       return t("insp.type.plist");
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "gif":
+    case "webp":
+    case "bmp":
+    case "svg":
+    case "ico":
+      return t("insp.type.image");
     case "yml":
     case "yaml":
       return "YAML";
